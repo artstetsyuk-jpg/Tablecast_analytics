@@ -5,12 +5,18 @@ FORECASTER_DATA_DIR environment variable):
 
     data/locations/<slug>/visits.csv      cleaned history (visit_date, visitors)
     data/locations/<slug>/settings.json   name, language, country, station, prices, recipients
+    data/locations/<slug>/events.json     saved private events
     data/forecast_log.csv                 every forecast you chose to save
 """
+import hashlib
+import hmac
+import io
 import json
 import os
 import re
 import unicodedata
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +79,7 @@ def save_events(slug, events):
     (folder / "events.json").write_text(json.dumps(clean, indent=2, sort_keys=True), encoding="utf-8")
     return clean
 
+
 def list_locations():
     """[(slug, display_name), ...] for every location that has saved history."""
     root = data_dir() / "locations"
@@ -127,6 +134,25 @@ def load_log(slug):
     return log[log["location"] == slug].reset_index(drop=True)
 
 
+def _merge_into_global_log(new_rows_df):
+    """Merge a DataFrame of forecast log rows into data/forecast_log.csv without duplicates."""
+    if new_rows_df is None or new_rows_df.empty:
+        return
+    clean_new = new_rows_df[LOG_COLUMNS].copy()
+    path = _log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            old = pd.read_csv(path)
+            combined = pd.concat([old, clean_new], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["location", "made_on", "target_date"], keep="last")
+        except Exception:
+            combined = clean_new
+    else:
+        combined = clean_new
+    combined.to_csv(path, index=False)
+
+
 def log_forecast(slug, made_on, plan):
     """Save the open days of a plan (see core.build_plan). Saving the same forecast twice on the
     same day replaces it instead of duplicating it. Returns the number of days saved."""
@@ -143,28 +169,12 @@ def log_forecast(slug, made_on, plan):
     ], columns=LOG_COLUMNS)
     if new.empty:
         return 0
-    n_saved = len(new)
-
-    path = _log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        old = pd.read_csv(path)
-        same = (
-            (old["location"] == slug)
-            & (old["made_on"] == made_on.isoformat())
-            & old["target_date"].isin(new["target_date"])
-        )
-        new = pd.concat([old[~same], new], ignore_index=True) if (~same).any() else new
-    new.to_csv(path, index=False)
-    return n_saved
+    _merge_into_global_log(new)
+    return len(new)
 
 
 def compare_log_to_actuals(log, visits):
-    """Match saved forecasts to what really happened.
-
-    For each target date uses the most recent forecast made BEFORE that day, then joins the
-    real visitor count. Returns columns: target_date, predicted, low, high, actual.
-    """
+    """Match saved forecasts to what really happened."""
     columns = ["target_date", "predicted", "low", "high", "actual"]
     if log is None or len(log) == 0:
         return pd.DataFrame(columns=columns)
@@ -196,14 +206,8 @@ def track_record_metrics(compared):
 
 
 # ============================================================================
-# ADDON: Per-Location Passwords & Optional Supabase Cloud Sync
+# Per-Location Passwords & Optional Supabase Cloud Sync
 # ============================================================================
-import hashlib
-import hmac
-import urllib.parse
-import urllib.request
-
-
 def hash_password(password: str) -> str:
     salt = os.urandom(16).hex()
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
@@ -213,7 +217,7 @@ def hash_password(password: str) -> str:
 def save_location_password(slug: str, raw_password: str):
     """Write password_hash directly into the location's settings.json file."""
     slug = slugify(slug)
-    p = data_dir() / "locations" / slug / "settings.json"
+    p = _location_dir(slug) / "settings.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     data["password_hash"] = hash_password(raw_password)
@@ -221,7 +225,7 @@ def save_location_password(slug: str, raw_password: str):
 
 
 def _get_stored_hash(slug: str) -> str:
-    p = data_dir() / "locations" / slugify(slug) / "settings.json"
+    p = _location_dir(slugify(slug)) / "settings.json"
     if not p.exists():
         return ""
     try:
@@ -265,13 +269,13 @@ def is_cloud_enabled() -> bool:
 
 
 def sync_to_cloud(slug: str):
-    """Push local location files to Supabase if SUPABASE_URL & SUPABASE_KEY are configured."""
+    """Push local location files and this location's forecast log to Supabase."""
     creds = _cloud_creds()
     if not creds:
         return
     base_url, api_key = creds
     slug = slugify(slug)
-    loc_folder = data_dir() / "locations" / slug
+    loc_folder = _location_dir(slug)
     if not loc_folder.exists():
         return
 
@@ -280,15 +284,14 @@ def sync_to_cloud(slug: str):
         ("settings.json", "settings_json"),
         ("events.json", "events_json"),
         ("visits.csv", "visits_csv"),
-        ("log.csv", "log_csv"),
-        ("forecast_log.csv", "log_csv"),
     ):
         fpath = loc_folder / fname
         if fpath.exists():
             payload[col] = fpath.read_text(encoding="utf-8")
 
-    if _log_path().exists():
-        payload["log_csv"] = _log_path().read_text(encoding="utf-8")
+    loc_log = load_log(slug)
+    if not loc_log.empty:
+        payload["log_csv"] = loc_log.to_csv(index=False)
 
     req = urllib.request.Request(
         f"{base_url}/rest/v1/tablecast_locations",
@@ -309,7 +312,7 @@ def sync_to_cloud(slug: str):
 
 
 def pull_all_from_cloud():
-    """Restore any cloud-saved locations into the local ./data/locations/ folder on startup."""
+    """Restore and merge cloud-saved locations and forecast logs into ./data/ on startup."""
     creds = _cloud_creds()
     if not creds:
         return
@@ -326,15 +329,27 @@ def pull_all_from_cloud():
             slug = slugify(row.get("slug", ""))
             if not slug:
                 continue
-            loc_folder = data_dir() / "locations" / slug
+            loc_folder = _location_dir(slug)
             loc_folder.mkdir(parents=True, exist_ok=True)
-            for fname, col in (
-                ("settings.json", "settings_json"),
-                ("events.json", "events_json"),
-                ("visits.csv", "visits_csv"),
-                ("log.csv", "log_csv"),
-            ):
+
+            for fname, col in (("settings.json", "settings_json"), ("events.json", "events_json")):
                 if row.get(col) and not (loc_folder / fname).exists():
                     (loc_folder / fname).write_text(row[col], encoding="utf-8")
+
+            if row.get("visits_csv"):
+                try:
+                    cloud_visits = pd.read_csv(io.StringIO(row["visits_csv"]), parse_dates=["visit_date"])
+                    cloud_visits["visitors"] = pd.to_numeric(cloud_visits["visitors"], errors="coerce")
+                    save_visits(slug, cloud_visits.dropna())
+                except Exception:
+                    pass
+
+            if row.get("log_csv"):
+                try:
+                    cloud_log = pd.read_csv(io.StringIO(row["log_csv"]))
+                    if set(LOG_COLUMNS).issubset(cloud_log.columns):
+                        _merge_into_global_log(cloud_log)
+                except Exception:
+                    pass
     except Exception:
         pass
