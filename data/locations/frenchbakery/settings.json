@@ -4,8 +4,10 @@
   "country": "FR",
   "station": "07222",
   "lunch_share": 40,
+  "weekend_lunch_share": 40,
   "avg_spend": 25.0,
+  "dinner_spend": 32.0,
   "guests_per_server": 15,
   "recipients": "art.stetsyuk@gmail.com",
-  "password_hash": "pbkdf2_sha256$b4f3ed371da57c416201a46f2a32f4f9$96363443d1d252fd0b0a02b1c326fbecc182298ed9c9b90edaa35f5e65a584a4"
+  "password_hash": "pbkdf2_sha256$bee9fcaedb20f508b56e462aebec29dd$8363968aef432da8697fa82d10bfa77b66d3dd1f4c1bfd75cc2f418e079818d7"
 }

@@ -1,4 +1,6 @@
 """Plan formatting and the PDF report (no Streamlit dependency). Email lives in mailer.py."""
+import unicodedata
+
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
@@ -14,11 +16,7 @@ PDF_SHARES = {
 # Plan -> table rows
 # ----------------------------------------------------------------------------
 def format_plan(plan, t, days, months, show_range, currency="€"):
-    """Returns (headers, table_rows, pdf_rows).
-
-    table_rows: list of dicts (numbers stay numbers) for the on-screen table / CSV.
-    pdf_rows:   list of preformatted string lists for the PDF.
-    """
+    """Returns (headers, table_rows, pdf_rows)."""
     rev_header = f"{t['col_revenue']} ({currency})" if currency else t["col_revenue"]
     headers = [t["col_date"], t["col_traffic"]]
     if show_range:
@@ -77,6 +75,8 @@ PDF_CHAR_MAP = {
     "€": "EUR",
     "œ": "oe",
     "Œ": "OE",
+    "ł": "l",
+    "Ł": "L",
     "—": "-",
     "–": "-",
     "’": "'",
@@ -88,12 +88,20 @@ PDF_CHAR_MAP = {
 
 
 def _latin1(text):
-    """Built-in PDF fonts only support Latin-1: transliterate ligatures/symbols before encoding."""
+    """Built-in PDF fonts only support Latin-1: preserve native Latin-1 characters (ä, ö, ü, ß, é, etc.)
+    and transliterate any non-Latin-1 characters (e.g., Č -> C, š -> s) instead of dropping them."""
     s = str(text)
     for src, dst in PDF_CHAR_MAP.items():
         s = s.replace(src, dst)
-    cleaned = s.encode("latin-1", "ignore").decode("latin-1")
-    return " ".join(cleaned.split())
+    out_chars = []
+    for ch in s:
+        try:
+            ch.encode("latin-1")
+            out_chars.append(ch)
+        except UnicodeEncodeError:
+            decomposed = unicodedata.normalize("NFKD", ch).encode("latin-1", "ignore").decode("latin-1")
+            out_chars.append(decomposed)
+    return " ".join("".join(out_chars).split())
 
 
 def build_pdf(title, summary_lines, headers, rows):

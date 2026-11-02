@@ -1,20 +1,7 @@
-"""Weekly report: train every saved location, build the PDF plan and email it.
-
-Run it on a schedule (cron / Task Scheduler / GitHub Actions, see README.md):
-
-    python weekly_report.py               # email every location that has recipients
-    python weekly_report.py --dry-run     # build PDFs into data/out/, send nothing, log nothing
-    python weekly_report.py --location cafe-zurich
-
-Needs SMTP_HOST, SMTP_USER, SMTP_PASSWORD (and optionally SMTP_PORT, SMTP_FROM), either as environment
-variables or in .streamlit/secrets.toml (the same file the app uses; run the script from the project folder).
-Uses the same model and plan logic as the app. Weather is assumed neutral (last week's average
-temperature, no rain), because there is nobody to move the weather inputs.
-"""
+"""Weekly report: train every saved location, build the PDF plan and email it."""
 import argparse
 import sys
 from datetime import date
-from pathlib import Path
 
 import pandas as pd
 
@@ -22,7 +9,7 @@ import core
 import mailer
 import reports
 import storage
-from i18n import DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
+from i18n import COUNTRY_CURRENCIES, DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
 
 STALE_NOTE_AFTER_DAYS = 3   # add a warning to the email when the newest data is older than this
 MAX_STALE_DAYS = 21         # refuse to forecast when the newest data is older than this
@@ -46,27 +33,33 @@ def build_location_report(slug, settings, today):
         )
     loc_station = settings.get("station", "Vienna")
     loc_country = settings.get("country", "AT")
+    currency = COUNTRY_CURRENCIES.get(loc_country, "€")
     saved_events = storage.load_events(slug)
     bundle = core.train_bundle(visits, loc_station, loc_country, events=saved_events)
     if bundle is None:
         raise ValueError("not enough usable history to train")
     history = bundle["history"]
 
-    # Forecast from the day after the newest data through the end of the planned week. If the saved
-    # data is stale this also covers the gap days (recursively), then we keep only the planned week.
     gap_to_end = pd.date_range(last_date + pd.Timedelta(days=1), start + pd.Timedelta(days=core.HORIZON - 1), freq="D")
     future_weather, _ = core.fetch_future_weather(loc_station, loc_country, gap_to_end, history)
     all_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS), future_weather)
     week_preds = all_preds.loc[start:start + pd.Timedelta(days=core.HORIZON - 1)]
 
+    lunch_share = int(settings.get("lunch_share", 40))
+    weekend_lunch_share = int(settings.get("weekend_lunch_share", lunch_share))
+    avg_spend = float(settings.get("avg_spend", 25.0))
+    dinner_spend = float(settings.get("dinner_spend", avg_spend))
+
     plan = core.build_plan(
         week_preds, bundle["intervals"], last_date, None, 0,
-        int(settings.get("lunch_share", 40)),
-        float(settings.get("avg_spend", 25.0)),
-        int(settings.get("guests_per_server", 15)),
+        lunch_share, avg_spend, int(settings.get("guests_per_server", 15)),
         events=saved_events,
+        weekend_lunch_share=weekend_lunch_share,
+        dinner_spend=dinner_spend,
     )
-    headers, _, pdf_rows = reports.format_plan(plan, t, days, months, bundle["intervals"] is not None)
+    headers, _, pdf_rows = reports.format_plan(
+        plan, t, days, months, bundle["intervals"] is not None, currency=currency
+    )
     lines, _ = reports.metric_lines(bundle, t)
     pdf_bytes = reports.build_pdf(f"{t['pdf_title']} - {name}", lines, headers, pdf_rows)
 
@@ -85,6 +78,8 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="write PDFs to data/out/ instead of emailing")
     parser.add_argument("--location", help="only this location slug (default: all with recipients)")
     args = parser.parse_args(argv)
+
+    storage.pull_all_from_cloud()
 
     cfg = None if args.dry_run else mailer.smtp_config(mailer.env_or_secrets_getter())
     if not args.dry_run and cfg is None:
@@ -112,7 +107,8 @@ def main(argv=None):
             else:
                 msg = mailer.build_email(cfg["from"], recipients, subject, body, pdf_bytes, f"forecast_{slug}.pdf")
                 mailer.send_email(msg, cfg)
-                storage.log_forecast(slug, today, plan)  # feeds the track record
+                storage.log_forecast(slug, today, plan)
+                storage.sync_to_cloud(slug)
                 print(f"[sent] {name}: {len(recipients)} recipient(s)")
         except (ValueError, OSError) as exc:
             failures += 1

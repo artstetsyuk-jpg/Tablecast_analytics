@@ -1,12 +1,12 @@
-"""AI Business Forecaster (Streamlit UI).
+"""AI Business Forecaster — Signature Edition (Streamlit UI).
 
 The forecasting logic lives in core.py, files/history in storage.py, PDF + email in reports.py,
-text in i18n.py. See README.md for setup, the weekly email and the password.
+text in i18n.py.
 """
 import csv
 import hmac
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import altair as alt
 import numpy as np
@@ -19,11 +19,266 @@ import reports
 import storage
 from i18n import COUNTRY_CURRENCIES, COUNTRY_NAMES, DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
 
-st.set_page_config(page_title="AI Traffic Forecaster", layout="wide")
+# Customize your personal brand name here — it appears in the top signature pill & footer
+CREATOR_SIGNATURE = "TABLECAST LABS"
+
+st.set_page_config(
+    page_title="TableCast AI — Hospitality Intelligence",
+    page_icon="🔮",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ============================================================================
+# Signature Design System (Custom CSS & Typography)
+# ============================================================================
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
+
+    :root {
+        --bg-card: rgba(22, 25, 32, 0.78);
+        --bg-card-hover: rgba(30, 34, 45, 0.92);
+        --border-subtle: rgba(255, 255, 255, 0.08);
+        --border-accent: rgba(245, 158, 11, 0.45);
+        --accent-gold: #F59E0B;
+        --accent-ember: #EA580C;
+        --accent-emerald: #10B981;
+        --text-primary: #F8FAFC;
+        --text-muted: #94A3B8;
+    }
+
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    /* Main container breathing room */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 3rem !important;
+        max-width: 1380px !important;
+    }
+
+    /* Signature Hero Banner */
+    .sig-hero {
+        background: radial-gradient(circle at 85% 15%, rgba(245, 158, 11, 0.16), transparent 45%),
+                    radial-gradient(circle at 15% 85%, rgba(234, 88, 12, 0.12), transparent 40%),
+                    linear-gradient(135deg, #0F1117 0%, #171A24 100%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 28px 34px;
+        margin-bottom: 24px;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+    }
+    .sig-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .sig-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        color: #FBBF24;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 5px 12px;
+        border-radius: 999px;
+    }
+    .sig-dot {
+        width: 7px;
+        height: 7px;
+        background: #10B981;
+        border-radius: 50%;
+        box-shadow: 0 0 8px #10B981;
+    }
+    .sig-title {
+        font-family: 'Syne', sans-serif;
+        font-size: 2.3rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: #FFFFFF;
+        margin: 0 0 6px 0;
+        line-height: 1.15;
+    }
+    .sig-subtitle {
+        color: #94A3B8;
+        font-size: 0.98rem;
+        margin: 0;
+        max-width: 760px;
+    }
+
+    /* Bento KPI Cards */
+    .bento-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+    .bento-card {
+        background: linear-gradient(180deg, rgba(26, 29, 39, 0.9) 0%, rgba(18, 20, 28, 0.95) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 20px 22px;
+        transition: all 0.22s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .bento-card:hover {
+        border-color: rgba(245, 158, 11, 0.4);
+        transform: translateY(-2px);
+        box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.45);
+    }
+    .bento-label {
+        color: #94A3B8;
+        font-size: 0.76rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 8px;
+    }
+    .bento-value {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1.85rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        line-height: 1.1;
+    }
+    .bento-sub {
+        margin-top: 8px;
+        font-size: 0.78rem;
+        color: #64748B;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .bento-pill-good {
+        color: #34D399;
+        background: rgba(16, 185, 129, 0.12);
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+    .bento-pill-warn {
+        color: #FBBF24;
+        background: rgba(245, 158, 11, 0.12);
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    /* 7-Day Visual Forecast Strip */
+    .day-strip {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(130px, 1fr));
+        gap: 10px;
+        margin: 16px 0 22px 0;
+        overflow-x: auto;
+    }
+    .day-card {
+        background: rgba(22, 25, 34, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 14px 12px;
+        text-align: center;
+        transition: all 0.2s ease;
+    }
+    .day-card:hover {
+        border-color: rgba(245, 158, 11, 0.45);
+        background: rgba(30, 34, 46, 0.95);
+    }
+    .day-card-closed {
+        opacity: 0.48;
+        background: rgba(15, 17, 23, 0.6);
+    }
+    .day-name {
+        font-weight: 700;
+        font-size: 0.82rem;
+        color: #E2E8F0;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .day-date {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        color: #64748B;
+        margin-bottom: 8px;
+    }
+    .day-wx {
+        font-size: 1.35rem;
+        margin: 4px 0;
+    }
+    .day-temp {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.74rem;
+        color: #94A3B8;
+        margin-bottom: 8px;
+    }
+    .day-guests {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1.35rem;
+        font-weight: 700;
+        color: #FBBF24;
+    }
+    .day-tag {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 0.66rem;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #CBD5E1;
+    }
+
+    /* Custom Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(18, 20, 28, 0.7);
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 8px 18px;
+        font-weight: 600;
+        font-size: 0.88rem;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(245, 158, 11, 0.18) !important;
+        color: #FBBF24 !important;
+    }
+
+    /* Signature Footer */
+    .sig-footer {
+        margin-top: 48px;
+        padding: 18px 24px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #64748B;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ----------------------------------------------------------------------------
-# Cached wrappers (so moving a widget never retrains the model)
+# Cached wrappers & Demo Data Generator
 # ----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def cached_read_csv(raw_bytes):
@@ -35,23 +290,81 @@ def cached_train(visits, station, country, events=None):
     return core.train_bundle(visits, station, country, events=events)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_future_weather(station, country, _future_dates, _history):
+    return core.fetch_future_weather(station, country, _future_dates, _history)
+
+
+@st.cache_data(show_spinner=False)
+def generate_demo_visits():
+    """Generate 180 days of realistic bistro visitor history so anyone can test the app immediately."""
+    rng = np.random.default_rng(42)
+    end_d = date.today() - timedelta(days=1)
+    dates = pd.date_range(end_d - timedelta(days=179), end_d, freq="D")
+    dow_base = np.array([0, 75, 85, 95, 135, 165, 120])  # Closed Mondays
+    rows = []
+    for i, d in enumerate(dates):
+        if d.dayofweek == 0:
+            continue
+        trend = 1.0 + 0.12 * (i / len(dates))
+        seasonal = 1.0 + 0.10 * np.sin(2 * np.pi * d.dayofyear / 365.0)
+        noise = rng.normal(1.0, 0.11)
+        guests = max(15, int(round(dow_base[d.dayofweek] * trend * seasonal * noise)))
+        rows.append({"visit_date": d, "visitors": float(guests)})
+    return pd.DataFrame(rows)
+
+
 def get_secret(name):
-    """Environment variable first, then Streamlit secrets (if a secrets file exists)."""
     value = os.environ.get(name)
     if value:
         return value
     try:
         return st.secrets.get(name)
-    except Exception:  # no secrets.toml configured
+    except Exception:
         return None
 
 
+def weather_icon(temp, rain):
+    if rain >= 5.0:
+        return "🌧️"
+    if rain >= 0.8:
+        return "🌦️"
+    if temp >= 20.0:
+        return "☀️"
+    if temp >= 12.0:
+        return "⛅"
+    return "☁️"
+
+
+def explain_day_driver(d, temp, rain, holiday_dates, on_event, is_closed):
+    """Human-readable 'Why this forecast?' micro-tag for each day card."""
+    if is_closed:
+        return "🔒 Regular Closure"
+    if on_event:
+        return "🎉 Private Event"
+    if d in holiday_dates:
+        return "🏛️ Public Holiday"
+    if rain >= 3.0 and d.dayofweek >= 5:
+        return "🌧️ Wknd Rain Drag"
+    if temp >= 18.0 and rain <= 0.5:
+        return "☀️ Patio Boost"
+    if d.day in {1, 15} or d.day >= 25:
+        return "💰 Payday Window"
+    if d.dayofweek in {4, 5}:
+        return "🔥 Peak Night"
+    return "📊 Organic Trend"
+
+
 # ============================================================================
-# Page setup, language, optional password
+# Session state & Cloud Sync
 # ============================================================================
 for key, default in (
-    ("ai_trained", False), ("file_sig", None), ("authed", False),
-    ("auth_role", "admin"), ("locked_slug", None), ("cloud_pulled", False),
+    ("authed", False),
+    ("auth_role", "admin"),
+    ("locked_slug", None),
+    ("force_login", False),
+    ("cloud_pulled", False),
+    ("use_demo", False),
 ):
     if key not in st.session_state:
         st.session_state[key] = default
@@ -68,29 +381,30 @@ t = TRANSLATIONS[selected_lang]
 DAYS = DAY_TRANSLATIONS[selected_lang]
 MONTHS = MONTH_TRANSLATIONS[selected_lang]
 
-st.title(t["title"])
-st.write(t["subtitle"])
+# Signature Hero Header
+st.markdown(
+    f"""
+    <div class="sig-hero">
+        <div class="sig-hero-top">
+            <span class="sig-badge"><span class="sig-dot"></span> {CREATOR_SIGNATURE} • HOSPITALITY AI</span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:0.75rem; color:#64748B;">
+                ENSEMBLE ENGINE v2.4 • OPEN-METEO LIVE
+            </span>
+        </div>
+        <h1 class="sig-title">{t["title"]}</h1>
+        <p class="sig-subtitle">{t["subtitle"]}</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-flash = st.session_state.pop("flash", None)  # message queued right before a rerun
+flash = st.session_state.pop("flash", None)
 if flash:
     getattr(st, flash[0])(flash[1])
 
-# One shared password (APP_PASSWORD). This keeps strangers out; it is NOT per-user accounts.
-saved_locations = storage.list_locations()
-saved_names = dict(saved_locations)
-
-# Multi-location login (Admin or specific restaurant client)
 # ============================================================================
-# Multi-Tenant Login & Sidebar Setup
+# Multi-Tenant Login
 # ============================================================================
-for key, default in (
-    ("auth_role", "admin"),
-    ("locked_slug", None),
-    ("force_login", False),
-):
-    if key not in st.session_state:
-        st.session_state[key] = default
-
 saved_locations = storage.list_locations()
 saved_names = dict(saved_locations)
 
@@ -98,37 +412,45 @@ app_password = get_secret("APP_PASSWORD")
 need_login = bool(app_password) or storage.has_any_location_passwords() or st.session_state.get("force_login", False)
 
 if need_login and not st.session_state.get("authed", False):
-    st.subheader("🔐 Login — TableCast Analytics")
-    login_choices = ["👑 Admin (All Locations)"] + [f"🏪 {name} ({s})" for s, name in saved_locations]
-    picked_login = st.selectbox("Select Account / Location", login_choices, key="login_account_select")
-    entered = st.text_input(t["password_prompt"], type="password", key="password_input")
-    
-    if st.button("🔓 Sign In", key="login_submit_btn") or entered:
-        if picked_login.startswith("👑"):
-            expected_admin_pw = str(app_password) if app_password else "admin"
-            if hmac.compare_digest(entered.encode("utf-8"), expected_admin_pw.encode("utf-8")):
-                st.session_state.authed = True
-                st.session_state.auth_role = "admin"
-                st.session_state.locked_slug = None
-                st.session_state.force_login = False
-                st.session_state.pop("password_input", None)
-                st.rerun()
+    col_l1, col_l2, col_l3 = st.columns([1, 1.4, 1])
+    with col_l2:
+        st.subheader("🔐 Login — TableCast Analytics")
+        login_choices = []
+        if app_password:
+            login_choices.append("👑 Admin (All Locations)")
+        login_choices.extend([f"🏪 {name} ({s})" for s, name in saved_locations])
+        if not login_choices:
+            login_choices.append("👑 Admin (All Locations)")
+
+        picked_login = st.selectbox("Select Account / Location", login_choices, key="login_account_select")
+        entered = st.text_input(t["password_prompt"], type="password", key="password_input")
+
+        if st.button("🔓 Sign In", key="login_submit_btn", use_container_width=True) or entered:
+            if picked_login.startswith("👑"):
+                if app_password and hmac.compare_digest(entered.encode("utf-8"), str(app_password).encode("utf-8")):
+                    st.session_state.authed = True
+                    st.session_state.auth_role = "admin"
+                    st.session_state.locked_slug = None
+                    st.session_state.force_login = False
+                    st.session_state.pop("password_input", None)
+                    st.rerun()
+                else:
+                    st.error(t["password_wrong"])
             else:
-                st.error(t["password_wrong"])
-        else:
-            target_slug = picked_login.rsplit("(", 1)[-1].rstrip(")")
-            if storage.verify_location_password(target_slug, entered):
-                st.session_state.authed = True
-                st.session_state.auth_role = "client"
-                st.session_state.locked_slug = target_slug
-                st.session_state.force_login = False
-                st.session_state.pop("password_input", None)
-                st.rerun()
-            else:
-                st.error(t["password_wrong"])
+                target_slug = picked_login.rsplit("(", 1)[-1].rstrip(")")
+                if storage.verify_location_password(target_slug, entered):
+                    st.session_state.authed = True
+                    st.session_state.auth_role = "client"
+                    st.session_state.locked_slug = target_slug
+                    st.session_state.force_login = False
+                    st.session_state.pop("password_input", None)
+                    st.rerun()
+                else:
+                    st.error(t["password_wrong"])
     st.stop()
+
 # ============================================================================
-# Sidebar: location, upload, settings, events
+# Sidebar: Location, Upload, Settings, Events
 # ============================================================================
 pending_location = st.session_state.pop("pending_location", None)
 if pending_location in saved_names:
@@ -136,7 +458,6 @@ if pending_location in saved_names:
 
 st.sidebar.header(t["location_header"])
 if st.session_state.auth_role == "client" and st.session_state.locked_slug:
-    # Client is locked strictly to their own restaurant
     chosen_slug = st.session_state.locked_slug
     loc_name = saved_names.get(chosen_slug, chosen_slug)
     slug = chosen_slug
@@ -153,10 +474,12 @@ else:
         t["location_name"], value=saved_names.get(chosen_slug, ""), key=f"loc_name_{chosen_slug or 'new'}"
     ).strip()
     slug = storage.slugify(loc_name) if loc_name else "default"
+    if need_login and st.sidebar.button("🚪 Log out", key="admin_logout_btn"):
+        st.session_state.authed = False
+        st.rerun()
 
 settings = storage.load_settings(slug) if slug in saved_names else {}
 
-# Admin-only field to set or change this location's password
 new_loc_password = ""
 if st.session_state.auth_role == "admin":
     pw_status = "✅ Password set (type to change)" if settings.get("password_hash") else "🔑 Set Location Password (optional)"
@@ -171,15 +494,23 @@ st.sidebar.subheader(t["settings_header"])
 country_codes = list(COUNTRY_NAMES)
 country = st.sidebar.selectbox(
     t["country_label"], country_codes,
-    index=country_codes.index(settings["country"]) if settings.get("country") in country_codes else 0,
+    index=country_codes.index(settings["country"]) if settings.get("country") in country_codes else 2,
     format_func=lambda c: f"{COUNTRY_NAMES[c]} ({c})", key=f"country_{slug}",
 )
 station = st.sidebar.text_input(t["station_label"], value=settings.get("station", "Vienna"), key=f"station_{slug}").strip()
 lunch_share = st.sidebar.slider(t["lunch_share"], 0, 100, int(settings.get("lunch_share", 40)), key=f"lunch_{slug}")
+weekend_lunch_share = st.sidebar.slider(
+    t.get("weekend_lunch_share", "Weekend Lunch Share (%)"),
+    0, 100, int(settings.get("weekend_lunch_share", lunch_share)), key=f"wknd_lunch_{slug}",
+)
 currency = COUNTRY_CURRENCIES.get(country, "€")
 avg_spend = st.sidebar.number_input(
     t["avg_spend"].replace("€", currency),
-    min_value=0.0, value=float(settings.get("avg_spend", 25.0)), step=1.0, key=f"spend_{slug}"
+    min_value=0.0, value=float(settings.get("avg_spend", 25.0)), step=1.0, key=f"spend_{slug}",
+)
+dinner_spend = st.sidebar.number_input(
+    t.get("dinner_spend", f"{t['shift_dinner']} {t['avg_spend']}").replace("€", currency),
+    min_value=0.0, value=float(settings.get("dinner_spend", max(avg_spend, 32.0))), step=1.0, key=f"dinner_spend_{slug}",
 )
 guests_per_server = st.sidebar.number_input(
     t["guests_per_server"], min_value=1, value=int(settings.get("guests_per_server", 15)), step=1, key=f"gps_{slug}"
@@ -204,9 +535,11 @@ if has_custom_event:
     if ev_col1.button("➕ Save Event", key="save_event_btn"):
         saved_events[event_date.isoformat()] = event_extra_visitors
         storage.save_events(slug, saved_events)
+        storage.sync_to_cloud(slug)
         st.rerun()
     if saved_events and ev_col2.button("🗑️ Clear All", key="clear_events_btn"):
         saved_events = storage.save_events(slug, {})
+        storage.sync_to_cloud(slug)
         st.rerun()
 
 if saved_events:
@@ -214,23 +547,25 @@ if saved_events:
     st.sidebar.caption(f"📅 **Saved Events:** {events_summary}")
 
 # ============================================================================
-# Data: uploaded file, saved history, or both (new days are added to saved history)
+# Data Ingestion or 1-Click Live Demo Mode
 # ============================================================================
 saved_visits = storage.load_visits(slug) if slug in saved_names else None
 
-if uploaded_file is None and saved_visits is None:
-    st.session_state.ai_trained = False
-    st.session_state.file_sig = None
+if uploaded_file is None and saved_visits is None and not st.session_state.use_demo:
     st.info(t["waiting_msg"])
+    col_demo1, col_demo2, _ = st.columns([1.2, 2, 2])
+    if col_demo1.button("✨ Load Live Demo Bistro (180 Days)", type="primary", use_container_width=True):
+        st.session_state.use_demo = True
+        st.rerun()
     st.stop()
 
 if uploaded_file is not None:
+    st.session_state.use_demo = False
     try:
         raw_df = cached_read_csv(uploaded_file.getvalue())
     except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, csv.Error):
         st.error(t["err_read"])
         st.stop()
-    # When history is already saved, a short upload of just the newest days is fine.
     upload_min_days = 1 if saved_visits is not None else core.MIN_DAYS
     upload_clean, notes, error = core.clean_visits(raw_df, min_days=upload_min_days)
     for level, key, kwargs in notes:
@@ -242,27 +577,30 @@ if uploaded_file is not None:
     if len(visits) < core.MIN_DAYS:
         st.error(t["err_too_short"].format(min=core.MIN_DAYS, found=len(visits)))
         st.stop()
-    st.success(t["success_loaded"].format(n=len(visits)))
-    file_sig = (slug, uploaded_file.name, uploaded_file.size, len(visits))
-else:
+    st.toast(t["success_loaded"].format(n=len(visits)), icon="✅")
+elif saved_visits is not None:
+    st.session_state.use_demo = False
     visits = saved_visits
-    st.info(t["loaded_saved"].format(n=len(visits)))
-    file_sig = (slug, None, None, len(visits))
-
-# New data (or another location) invalidates the previous "trained" state.
-if st.session_state.file_sig != file_sig:
-    st.session_state.file_sig = file_sig
-    st.session_state.ai_trained = False
+else:
+    visits = generate_demo_visits()
+    if not loc_name:
+        loc_name = "Bistro Lumière (Demo)"
+    st.caption(
+        "✨ **Live Demo Mode Active:** Showing 180 days of synthetic bistro data (closed Mondays). "
+        "Upload a CSV in the sidebar at any time to switch to your own data."
+    )
 
 st.sidebar.markdown("---")
-if st.sidebar.button(t["save_location_btn"], key="save_location_button"):
+if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_container_width=True):
     if not loc_name:
         st.sidebar.error(t["err_location_name"])
     else:
         storage.save_visits(slug, visits)
         storage.save_settings(slug, {
             "name": loc_name, "language": selected_lang, "country": country, "station": station,
-            "lunch_share": lunch_share, "avg_spend": avg_spend, "guests_per_server": int(guests_per_server),
+            "lunch_share": lunch_share, "weekend_lunch_share": weekend_lunch_share,
+            "avg_spend": avg_spend, "dinner_spend": dinner_spend,
+            "guests_per_server": int(guests_per_server),
             "recipients": recipients_text,
             "password_hash": storage.hash_password(new_loc_password) if new_loc_password else settings.get("password_hash", ""),
         })
@@ -270,15 +608,10 @@ if st.sidebar.button(t["save_location_btn"], key="save_location_button"):
         st.session_state["pending_location"] = slug
         st.session_state["flash"] = ("success", t["saved_ok"])
         st.rerun()
-        st.session_state["pending_location"] = slug
-        st.session_state["flash"] = ("success", t["saved_ok"])
-        st.rerun()
 
-if st.sidebar.button(t["train_btn"], key="train_ai_button"):
-    st.session_state.ai_trained = True
-if not st.session_state.ai_trained:
-    st.stop()
-
+# ============================================================================
+# Model Training & Future Forecast Calculation
+# ============================================================================
 with st.spinner(t["spinner"]):
     bundle = cached_train(visits, station, country, saved_events)
 if bundle is None:
@@ -287,80 +620,20 @@ if bundle is None:
 if not bundle["weather_ok"]:
     st.warning(t["warn_weather"])
 
-# ============================================================================
-# Metrics and charts
-# ============================================================================
-summary_lines, baseline_text = reports.metric_lines(bundle, t)
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric(t["metric_visitors"], f"{bundle['mean_visitors']:.0f}")
-col2.metric(t["metric_mae"], f"± {bundle['mae']:.2f} {t['unit_people']}")
-col3.metric(t["metric_wape"], core.fmt_pct(bundle["wape"]))
-col4.metric(t["metric_wape7"], core.fmt_pct(bundle["wape7"]))
-
-st.caption(baseline_text)
-if np.isfinite(bundle["wape7"]) and np.isfinite(bundle["base_wape7"]):
-    if bundle["wape7"] < bundle["base_wape7"]:
-        st.success(t["verdict_better"])
-    else:
-        st.warning(t["verdict_worse"])
-
-st.subheader(t["main_chart_header"])
-st.line_chart(
-    bundle["chart"].rename(
-        columns={"actual": t["legend_actual"], "pred": t["legend_pred"], "baseline": t["legend_baseline"]}
-    )
-)
-
-st.markdown("---")
-st.subheader(t["dow_header"])
-st.write(t["dow_sub"])
-dow_df = pd.DataFrame({"day": DAYS, "visitors": bundle["dow_means"].to_numpy()})
-dow_chart = (
-    alt.Chart(dow_df)
-    .mark_bar()
-    .encode(
-        x=alt.X("day:N", sort=DAYS, title=None),
-        y=alt.Y("visitors:Q", title=t["metric_visitors"]),
-        tooltip=["day", alt.Tooltip("visitors:Q", format=".1f")],
-    )
-    .properties(width="container", height=320)
-)
-st.altair_chart(dow_chart)
-
-# ============================================================================
-# 7-day planner (with forecast ranges)
-# ============================================================================
-st.markdown("---")
-st.subheader(t["planner_header"])
-
 history = bundle["history"]
 last_date = history.index[-1]
-st.caption(t["forecast_from"].format(date=last_date.strftime("%Y-%m-%d")))
-if bundle["closed_weekdays"]:
-    st.caption(t["closed_caption"].format(days=", ".join(DAYS[d] for d in sorted(bundle["closed_weekdays"]))))
-
 future_dates = core.future_dates_after(history)
-auto_weather, live_weather_ok = core.fetch_future_weather(station, country, future_dates, history)
+auto_weather, live_weather_ok = cached_future_weather(station, country, future_dates, history)
 
-manual_override = st.checkbox(
-    t.get("manual_weather_override", "Override automatic weather forecast manually (What-If scenario)"),
-    value=not live_weather_ok,
-    key="manual_weather_checkbox",
-)
+# Pre-compute weather and plan so KPIs and tabs can share them
+manual_override = st.session_state.get("manual_weather_checkbox", False)
 if manual_override:
     default_temp, _ = core.default_weather(history)
-    col_b1, col_b2 = st.columns(2)
-    pred_temp = col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
-    pred_rain = col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
+    pred_temp = st.session_state.get("temp_slider_input", default_temp)
+    pred_rain = st.session_state.get("rain_slider_input", 0.0)
     future_weather = pd.DataFrame({"temp": pred_temp, "rain": pred_rain}, index=future_dates)
 else:
     future_weather = auto_weather
-    weather_summary = " | ".join(
-        f"{DAYS[d.dayofweek][:3]}: {row['temp']:.0f}°C, {row['rain']:.1f}mm"
-        for d, row in future_weather.iterrows()
-    )
-    st.caption(f"🌦️ **Open-Meteo 7-Day Forecast ({station}):** {weather_summary}")
 
 base_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS), future_weather)
 
@@ -374,90 +647,290 @@ plan = core.build_plan(
     event_date if event_active else None, event_extra_visitors,
     lunch_share, avg_spend, int(guests_per_server),
     events=saved_events,
+    weekend_lunch_share=weekend_lunch_share,
+    dinner_spend=dinner_spend,
 )
-show_range = bundle["intervals"] is not None
-headers, table_rows, pdf_rows = reports.format_plan(plan, t, DAYS, MONTHS, show_range, currency=currency)
-forecast_df = pd.DataFrame(table_rows)
-st.dataframe(forecast_df, hide_index=True)
-if show_range:
-    st.caption(t["range_caption"])
+
+week_total_guests = sum(r["expected"] for r in plan)
+week_total_rev = sum(r["revenue"] for r in plan)
+beats_baseline = (
+    np.isfinite(bundle["wape7"])
+    and np.isfinite(bundle["base_wape7"])
+    and bundle["wape7"] < bundle["base_wape7"]
+)
+edge_pct = bundle["base_wape7"] - bundle["wape7"] if np.isfinite(bundle["wape7"]) else 0.0
 
 # ============================================================================
-# Exports and email
+# Signature Bento KPI Grid
 # ============================================================================
-pdf_bytes = reports.build_pdf(t["pdf_title"] + (f" - {loc_name}" if loc_name else ""), summary_lines, headers, pdf_rows)
+verdict_pill = (
+    f'<span class="bento-pill-good">▲ {edge_pct:+.1f}% vs Baseline</span>'
+    if beats_baseline
+    else '<span class="bento-pill-warn">⚠️ Close to Baseline</span>'
+)
 
-d_col1, d_col2 = st.columns(2)
-with d_col1:
-    st.download_button(
-        label=t["download_btn"],
-        data=forecast_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="weekly_forecast_schedule.csv",
-        mime="text/csv",
-        key="download_csv_btn",
-    )
-with d_col2:
-    st.download_button(
-        label=t["download_pdf_btn"],
-        data=pdf_bytes,
-        file_name="executive_forecast_report.pdf",
-        mime="application/pdf",
-        key="download_pdf_btn",
-    )
+st.markdown(
+    f"""
+    <div class="bento-grid">
+        <div class="bento-card">
+            <div class="bento-label">7-Day Projected Traffic</div>
+            <div class="bento-value">{week_total_guests:,} <span style="font-size:0.95rem;color:#94A3B8;">guests</span></div>
+            <div class="bento-sub">Hist. Avg: {bundle['mean_visitors']:.0f} / day</div>
+        </div>
+        <div class="bento-card">
+            <div class="bento-label">7-Day Projected Revenue</div>
+            <div class="bento-value" style="color:#FBBF24;">{currency}{week_total_rev:,.0f}</div>
+            <div class="bento-sub">Lunch {currency}{avg_spend:.0f} • Dinner {currency}{dinner_spend:.0f}</div>
+        </div>
+        <div class="bento-card">
+            <div class="bento-label">{t["metric_wape7"]}</div>
+            <div class="bento-value">{core.fmt_pct(bundle["wape7"])}</div>
+            <div class="bento-sub">{verdict_pill}</div>
+        </div>
+        <div class="bento-card">
+            <div class="bento-label">{t["metric_mae"]}</div>
+            <div class="bento-value">±{bundle["mae"]:.1f} <span style="font-size:0.95rem;color:#94A3B8;">{t["unit_people"]}</span></div>
+            <div class="bento-sub">Next-Day WAPE: {core.fmt_pct(bundle["wape"])}</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.markdown("---")
-st.subheader(t["email_header"])
-st.caption(f"{t['email_recipients']}: {recipients_text or '-'}")
-if st.button(t["email_send_btn"], key="send_email_button"):
-    smtp = mailer.smtp_config(get_secret)
-    recipients = mailer.parse_recipients(recipients_text)
-    if smtp is None:
-        st.error(t["email_not_configured"])
-    elif not recipients:
-        st.error(t["email_no_recipients"])
-    else:
-        message = mailer.build_email(
-            smtp["from"], recipients,
-            t["email_subject"].format(name=loc_name or "-", date=future_dates[0].strftime("%Y-%m-%d")),
-            t["email_body"].format(
-                name=loc_name or "-", date=last_date.strftime("%Y-%m-%d"),
-                total=sum(row["expected"] for row in plan),
+# ============================================================================
+# Workspace Tabs
+# ============================================================================
+tab_plan, tab_ai, tab_track, tab_export = st.tabs([
+    t["planner_header"],
+    "📊 AI Performance & Backtest",
+    t["tracking_header"],
+    "📤 PDF & Email Dispatch",
+])
+
+# ----------------------------------------------------------------------------
+# TAB 1: 7-Day Planner + Visual Weather Strip + Explainable AI Tags
+# ----------------------------------------------------------------------------
+with tab_plan:
+    top_c1, top_c2 = st.columns([2.2, 1.2])
+    with top_c1:
+        st.caption(t["forecast_from"].format(date=last_date.strftime("%Y-%m-%d")))
+        if bundle["closed_weekdays"]:
+            st.caption(t["closed_caption"].format(days=", ".join(DAYS[d] for d in sorted(bundle["closed_weekdays"]))))
+    with top_c2:
+        st.checkbox(
+            t.get("manual_weather_override", "Override weather forecast manually (What-If)"),
+            value=not live_weather_ok,
+            key="manual_weather_checkbox",
+        )
+
+    if st.session_state.get("manual_weather_checkbox", False):
+        default_temp, _ = core.default_weather(history)
+        col_b1, col_b2 = st.columns(2)
+        col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
+        col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
+
+    # 7-Day Visual Weather & Driver Strip
+    holiday_set = set(bundle["forecaster"].holiday_dates)
+    cards_html = ['<div class="day-strip">']
+    for row in plan:
+        d = row["date"]
+        wx_row = future_weather.loc[d]
+        temp_val, rain_val = float(wx_row["temp"]), float(wx_row["rain"])
+        icon = weather_icon(temp_val, rain_val)
+        driver = explain_day_driver(d, temp_val, rain_val, holiday_set, row["on_event"], row["is_closed"])
+        closed_cls = " day-card-closed" if row["is_closed"] else ""
+        guest_txt = t["closed"] if row["is_closed"] else f"{row['expected']}"
+        cards_html.append(
+            f'<div class="day-card{closed_cls}">'
+            f'<div class="day-name">{DAYS[d.dayofweek][:3]}</div>'
+            f'<div class="day-date">{MONTHS[d.month - 1]} {d.day:02d}</div>'
+            f'<div class="day-wx">{icon}</div>'
+            f'<div class="day-temp">{temp_val:.0f}°C • {rain_val:.1f}mm</div>'
+            f'<div class="day-guests">{guest_txt}</div>'
+            f'<div class="day-tag">{driver}</div>'
+            f'</div>'
+        )
+    cards_html.append("</div>")
+    st.markdown("".join(cards_html), unsafe_allow_html=True)
+
+    show_range = bundle["intervals"] is not None
+    headers, table_rows, pdf_rows = reports.format_plan(plan, t, DAYS, MONTHS, show_range, currency=currency)
+    forecast_df = pd.DataFrame(table_rows)
+
+    max_traffic = max([r["expected"] for r in plan] + [1])
+    rev_col = f"{t['col_revenue']} ({currency})" if currency else t["col_revenue"]
+
+    st.dataframe(
+        forecast_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            t["col_traffic"]: st.column_config.ProgressColumn(
+                t["col_traffic"],
+                format="%d",
+                min_value=0,
+                max_value=int(max_traffic * 1.15),
             ),
-            pdf_bytes, "executive_forecast_report.pdf",
-        )
-        try:
-            mailer.send_email(message, smtp)
-            st.success(t["email_sent"].format(n=len(recipients)))
-        except OSError as exc:  # includes smtplib.SMTPException
-            st.error(t["email_failed"].format(reason=f"{type(exc).__name__}: {str(exc)[:200]}"))
-st.caption(t["auto_email_hint"])
-
-# ============================================================================
-# Track record: saved forecasts vs what really happened
-# ============================================================================
-st.markdown("---")
-st.subheader(t["tracking_header"])
-st.write(t["tracking_desc"])
-
-compared = storage.compare_log_to_actuals(storage.load_log(slug), visits)
-if compared.empty:
-    st.info(t["tracking_empty"])
-else:
-    record = storage.track_record_metrics(compared)
-    st.write(t["tracking_metrics"].format(
-        n=record["n"], wape=core.fmt_pct(record["wape"]), cov=core.fmt_pct(record["coverage"]),
-    ))
-    st.line_chart(
-        compared.set_index("target_date")[["actual", "predicted"]].rename(
-            columns={"actual": t["legend_actual"], "predicted": t["legend_pred"]}
-        )
+            rev_col: st.column_config.NumberColumn(
+                rev_col,
+                format=f"{currency}%.2f",
+            ),
+        },
     )
-if st.button(t["save_forecast_btn"], key="save_forecast_button"):
-    saved_days = storage.log_forecast(slug, date.today(), plan)
-    st.success(t["forecast_saved"].format(n=saved_days))
+    if show_range:
+        st.caption(t["range_caption"])
+
+# ----------------------------------------------------------------------------
+# TAB 2: AI Backtest Chart & Day-of-Week Signature Altair Visuals
+# ----------------------------------------------------------------------------
+with tab_ai:
+    summary_lines, baseline_text = reports.metric_lines(bundle, t)
+    st.caption(baseline_text)
+    if beats_baseline:
+        st.success(t["verdict_better"])
+    else:
+        st.warning(t["verdict_worse"])
+
+    st.subheader(t["main_chart_header"])
+    chart_df = (
+        bundle["chart"]
+        .rename(columns={"actual": t["legend_actual"], "pred": t["legend_pred"], "baseline": t["legend_baseline"]})
+        .reset_index()
+        .rename(columns={"index": "date"})
+    )
+    melted = chart_df.melt("date", var_name="Series", value_name="Visitors")
+    line_chart = (
+        alt.Chart(melted)
+        .mark_line(point=True, strokeWidth=2.5)
+        .encode(
+            x=alt.X("date:T", title=None),
+            y=alt.Y("Visitors:Q", title=t["metric_visitors"]),
+            color=alt.Color(
+                "Series:N",
+                scale=alt.Scale(
+                    domain=[t["legend_actual"], t["legend_pred"], t["legend_baseline"]],
+                    range=["#F8FAFC", "#F59E0B", "#64748B"],
+                ),
+                legend=alt.Legend(orient="top"),
+            ),
+            strokeDash=alt.condition(
+                alt.datum.Series == t["legend_baseline"],
+                alt.value([4, 4]),
+                alt.value([1, 0]),
+            ),
+            tooltip=["date:T", "Series:N", alt.Tooltip("Visitors:Q", format=".0f")],
+        )
+        .properties(height=340)
+        .interactive()
+    )
+    st.altair_chart(line_chart, use_container_width=True)
+
+    st.subheader(t["dow_header"])
+    st.write(t["dow_sub"])
+    dow_df = pd.DataFrame({"day": DAYS, "visitors": bundle["dow_means"].to_numpy()})
+    dow_chart = (
+        alt.Chart(dow_df)
+        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color="#F59E0B")
+        .encode(
+            x=alt.X("day:N", sort=DAYS, title=None),
+            y=alt.Y("visitors:Q", title=t["metric_visitors"]),
+            tooltip=["day", alt.Tooltip("visitors:Q", format=".1f")],
+        )
+        .properties(height=280)
+    )
+    st.altair_chart(dow_chart, use_container_width=True)
+
+# ----------------------------------------------------------------------------
+# TAB 3: Forecast Track Record & Proof
+# ----------------------------------------------------------------------------
+with tab_track:
+    st.subheader(t["tracking_header"])
+    st.write(t["tracking_desc"])
+
+    compared = storage.compare_log_to_actuals(storage.load_log(slug), visits)
+    if compared.empty:
+        st.info(t["tracking_empty"])
+    else:
+        record = storage.track_record_metrics(compared)
+        st.write(t["tracking_metrics"].format(
+            n=record["n"], wape=core.fmt_pct(record["wape"]), cov=core.fmt_pct(record["coverage"]),
+        ))
+        st.line_chart(
+            compared.set_index("target_date")[["actual", "predicted"]].rename(
+                columns={"actual": t["legend_actual"], "predicted": t["legend_pred"]}
+            )
+        )
+    if st.button(t["save_forecast_btn"], key="save_forecast_button", type="primary"):
+        saved_days = storage.log_forecast(slug, date.today(), plan)
+        storage.sync_to_cloud(slug)
+        st.success(t["forecast_saved"].format(n=saved_days))
+        st.rerun()
+
+# ----------------------------------------------------------------------------
+# TAB 4: Exports & Email Dispatch
+# ----------------------------------------------------------------------------
+with tab_export:
+    summary_lines, _ = reports.metric_lines(bundle, t)
+    pdf_bytes = reports.build_pdf(
+        t["pdf_title"] + (f" - {loc_name}" if loc_name else ""), summary_lines, headers, pdf_rows
+    )
+
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+        st.download_button(
+            label=t["download_btn"],
+            data=forecast_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="weekly_forecast_schedule.csv",
+            mime="text/csv",
+            key="download_csv_btn",
+            use_container_width=True,
+        )
+    with d_col2:
+        st.download_button(
+            label=t["download_pdf_btn"],
+            data=pdf_bytes,
+            file_name="executive_forecast_report.pdf",
+            mime="application/pdf",
+            key="download_pdf_btn",
+            use_container_width=True,
+        )
+
+    st.markdown("---")
+    st.subheader(t["email_header"])
+    st.caption(f"{t['email_recipients']}: {recipients_text or '-'}")
+    if st.button(t["email_send_btn"], key="send_email_button", type="primary"):
+        smtp = mailer.smtp_config(get_secret)
+        recipients = mailer.parse_recipients(recipients_text)
+        if smtp is None:
+            st.error(t["email_not_configured"])
+        elif not recipients:
+            st.error(t["email_no_recipients"])
+        else:
+            message = mailer.build_email(
+                smtp["from"], recipients,
+                t["email_subject"].format(name=loc_name or "-", date=future_dates[0].strftime("%Y-%m-%d")),
+                t["email_body"].format(
+                    name=loc_name or "-", date=last_date.strftime("%Y-%m-%d"),
+                    total=sum(row["expected"] for row in plan),
+                ),
+                pdf_bytes, "executive_forecast_report.pdf",
+            )
+            try:
+                mailer.send_email(message, smtp)
+                st.success(t["email_sent"].format(n=len(recipients)))
+            except OSError as exc:
+                st.error(t["email_failed"].format(reason=f"{type(exc).__name__}: {str(exc)[:200]}"))
+    st.caption(t["auto_email_hint"])
 
 # ============================================================================
-# Where saved data lives
+# Signature Maker Watermark Footer
 # ============================================================================
-st.markdown("---")
-st.caption(t["storage_note"].format(path=storage.data_dir().resolve()))
+st.markdown(
+    f"""
+    <div class="sig-footer">
+        <span>⚡ DESIGNED & ENGINEERED BY <strong style="color:#FBBF24;">{CREATOR_SIGNATURE}</strong></span>
+        <span>DATA VAULT: {storage.data_dir().resolve().name}/ • MULTI-TENANT READY</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
