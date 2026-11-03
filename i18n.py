@@ -1,15 +1,133 @@
 """All user-facing text (English / French / German)."""
 
 COUNTRY_NAMES = {
-    "FR": "France", "DE": "Germany", "AT": "Austria", "CH": "Switzerland",
-    "BE": "Belgium", "IT": "Italy", "ES": "Spain", "NL": "Netherlands",
+    "US": "United States",
+    "AU": "Australia",
     "GB": "United Kingdom",
+    "CA": "Canada",
+    "NZ": "New Zealand",
+    "FR": "France",
+    "DE": "Germany",
+    "AT": "Austria",
+    "CH": "Switzerland",
+    "BE": "Belgium",
+    "IT": "Italy",
+    "ES": "Spain",
+    "NL": "Netherlands",
 }
 
 COUNTRY_CURRENCIES = {
-    "FR": "€", "DE": "€", "AT": "€", "CH": "CHF",
-    "BE": "€", "IT": "€", "ES": "€", "NL": "€",
+    "US": "$",
+    "AU": "A$",
     "GB": "£",
+    "CA": "C$",
+    "NZ": "NZ$",
+    "FR": "€",
+    "DE": "€",
+    "AT": "€",
+    "CH": "CHF",
+    "BE": "€",
+    "IT": "€",
+    "ES": "€",
+    "NL": "€",
+}
+
+CURRENCY_OPTIONS = ["$", "A$", "€", "£", "CHF", "C$", "NZ$"]
+
+# Preset major cities per country + "Custom City / ZIP..." option
+COUNTRY_CITIES = {
+    "US": [
+        "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia",
+        "San Antonio", "San Diego", "Dallas", "Austin", "San Jose", "San Francisco",
+        "Miami", "Seattle", "Denver", "Boston", "Nashville", "Las Vegas", "Portland", "Atlanta",
+    ],
+    "AU": [
+        "Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide", "Gold Coast",
+        "Canberra", "Newcastle", "Sunshine Coast", "Wollongong", "Hobart", "Geelong",
+        "Townsville", "Cairns", "Darwin",
+    ],
+    "GB": ["London", "Manchester", "Birmingham", "Edinburgh", "Glasgow", "Liverpool", "Bristol", "Leeds"],
+    "CA": ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa", "Edmonton"],
+    "NZ": ["Auckland", "Wellington", "Christchurch", "Queenstown", "Hamilton"],
+    "AT": ["Vienna", "Salzburg", "Graz", "Innsbruck", "Linz"],
+    "DE": ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne", "Stuttgart"],
+    "FR": ["Paris", "Lyon", "Marseille", "Nice", "Bordeaux", "Toulouse"],
+    "CH": ["Zurich", "Geneva", "Basel", "Bern", "Lausanne"],
+    "BE": ["Brussels", "Antwerp", "Ghent", "Bruges"],
+    "IT": ["Rome", "Milan", "Florence", "Naples", "Venice", "Turin"],
+    "ES": ["Madrid", "Barcelona", "Valencia", "Seville", "Bilbao", "Malaga"],
+    "NL": ["Amsterdam", "Rotterdam", "The Hague", "Utrecht", "Eindhoven"],
+}
+
+# State / Territory subdivisions supported by the `holidays` library
+COUNTRY_SUBDIVISIONS = {
+    "AU": {
+        "Auto (From City)": "",
+        "New South Wales (NSW)": "NSW",
+        "Victoria (VIC)": "VIC",
+        "Queensland (QLD)": "QLD",
+        "Western Australia (WA)": "WA",
+        "South Australia (SA)": "SA",
+        "Tasmania (TAS)": "TAS",
+        "Australian Capital Territory (ACT)": "ACT",
+        "Northern Territory (NT)": "NT",
+    },
+    "US": {
+        "Auto (From City)": "",
+        "California (CA)": "CA",
+        "New York (NY)": "NY",
+        "Texas (TX)": "TX",
+        "Florida (FL)": "FL",
+        "Illinois (IL)": "IL",
+        "Pennsylvania (PA)": "PA",
+        "Arizona (AZ)": "AZ",
+        "Washington (WA)": "WA",
+        "Massachusetts (MA)": "MA",
+        "Colorado (CO)": "CO",
+        "Georgia (GA)": "GA",
+        "Nevada (NV)": "NV",
+        "Tennessee (TN)": "TN",
+        "Oregon (OR)": "OR",
+    },
+    "CA": {
+        "Auto (From City)": "",
+        "Ontario (ON)": "ON",
+        "British Columbia (BC)": "BC",
+        "Quebec (QC)": "QC",
+        "Alberta (AB)": "AB",
+    },
+    "GB": {
+        "Auto (From City)": "",
+        "England (ENG)": "ENG",
+        "Scotland (SCT)": "SCT",
+        "Wales (WLS)": "WLS",
+        "Northern Ireland (NIR)": "NIR",
+    },
+}
+
+# Maps Open-Meteo's `admin1` state name to the `holidays` subdivision code
+ADMIN1_TO_SUBDIV = {
+    # Australia
+    "New South Wales": "NSW", "Victoria": "VIC", "Queensland": "QLD",
+    "Western Australia": "WA", "South Australia": "SA", "Tasmania": "TAS",
+    "Australian Capital Territory": "ACT", "Northern Territory": "NT",
+    # United States (Top hospitality states + all 50 names)
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA", "Hawaii": "HI",
+    "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+    "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY",
+    # Canada & UK
+    "Ontario": "ON", "British Columbia": "BC", "Quebec": "QC", "Alberta": "AB",
+    "England": "ENG", "Scotland": "SCT", "Wales": "WLS", "Northern Ireland": "NIR",
 }
 
 TRANSLATIONS = {
