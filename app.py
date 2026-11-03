@@ -17,8 +17,17 @@ import core
 import mailer
 import reports
 import storage
-from i18n import COUNTRY_CURRENCIES, COUNTRY_NAMES, DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
-
+from i18n import (
+    ADMIN1_TO_SUBDIV,
+    COUNTRY_CITIES,
+    COUNTRY_CURRENCIES,
+    COUNTRY_NAMES,
+    COUNTRY_SUBDIVISIONS,
+    CURRENCY_OPTIONS,
+    DAY_TRANSLATIONS,
+    MONTH_TRANSLATIONS,
+    TRANSLATIONS,
+)
 # Customize your personal brand name here — it appears in the top signature pill & footer
 CREATOR_SIGNATURE = "TABLECAST LABS"
 
@@ -335,6 +344,21 @@ def weather_icon(temp, rain):
         return "⛅"
     return "☁️"
 
+def c_to_f(temp_c):
+    return temp_c * 9.0 / 5.0 + 32.0
+
+
+def f_to_c(temp_f):
+    return (temp_f - 32.0) * 5.0 / 9.0
+
+
+def fmt_temp(temp_c, unit="C"):
+    return f"{c_to_f(temp_c):.0f}°F" if unit == "F" else f"{temp_c:.0f}°C"
+
+
+def fmt_rain(rain_mm, unit="C"):
+    return f"{rain_mm / 25.4:.2f}in" if unit == "F" else f"{rain_mm:.1f}mm"
+
 
 def explain_day_driver(d, temp, rain, holiday_dates, on_event, is_closed):
     """Human-readable 'Why this forecast?' micro-tag for each day card."""
@@ -403,50 +427,98 @@ if flash:
     getattr(st, flash[0])(flash[1])
 
 # ============================================================================
-# Multi-Tenant Login
+# Private Multi-Tenant Portal (Sign In / Create Restaurant Account)
 # ============================================================================
 saved_locations = storage.list_locations()
 saved_names = dict(saved_locations)
-
 app_password = get_secret("APP_PASSWORD")
 need_login = bool(app_password) or storage.has_any_location_passwords() or st.session_state.get("force_login", False)
 
 if need_login and not st.session_state.get("authed", False):
-    col_l1, col_l2, col_l3 = st.columns([1, 1.4, 1])
+    col_l1, col_l2, col_l3 = st.columns([1, 1.45, 1])
     with col_l2:
-        st.subheader("🔐 Login — TableCast Analytics")
-        login_choices = []
-        if app_password:
-            login_choices.append("👑 Admin (All Locations)")
-        login_choices.extend([f"🏪 {name} ({s})" for s, name in saved_locations])
-        if not login_choices:
-            login_choices.append("👑 Admin (All Locations)")
+        tab_signin, tab_signup = st.tabs(["🔑 Sign In", "✨ Create Restaurant Account"])
 
-        picked_login = st.selectbox("Select Account / Location", login_choices, key="login_account_select")
-        entered = st.text_input(t["password_prompt"], type="password", key="password_input")
+        # --- TAB 1: PRIVATE SIGN IN ---
+        with tab_signin:
+            st.subheader("🔐 Sign In to Your Restaurant")
+            login_name = st.text_input(
+                "Restaurant Name",
+                placeholder="Enter your restaurant name...",
+                key="login_rest_name",
+            ).strip()
+            entered_pw = st.text_input(
+                t["password_prompt"],
+                type="password",
+                key="password_input",
+            )
 
-        if st.button("🔓 Sign In", key="login_submit_btn", use_container_width=True) or entered:
-            if picked_login.startswith("👑"):
-                if app_password and hmac.compare_digest(entered.encode("utf-8"), str(app_password).encode("utf-8")):
-                    st.session_state.authed = True
-                    st.session_state.auth_role = "admin"
-                    st.session_state.locked_slug = None
-                    st.session_state.force_login = False
-                    st.session_state.pop("password_input", None)
-                    st.rerun()
-                else:
-                    st.error(t["password_wrong"])
-            else:
-                target_slug = picked_login.rsplit("(", 1)[-1].rstrip(")")
-                if storage.verify_location_password(target_slug, entered):
+            if st.button("🔓 Sign In", key="login_submit_btn", type="primary", use_container_width=True):
+                target_slug = storage.slugify(login_name) if login_name else ""
+                if login_name.lower() in {"admin", "administrator"} and app_password:
+                    if hmac.compare_digest(entered_pw.encode("utf-8"), str(app_password).encode("utf-8")):
+                        st.session_state.authed = True
+                        st.session_state.auth_role = "admin"
+                        st.session_state.locked_slug = None
+                        st.session_state.pop("password_input", None)
+                        st.rerun()
+                    else:
+                        st.error(t["password_wrong"])
+                elif target_slug and storage.verify_location_password(target_slug, entered_pw):
                     st.session_state.authed = True
                     st.session_state.auth_role = "client"
                     st.session_state.locked_slug = target_slug
-                    st.session_state.force_login = False
                     st.session_state.pop("password_input", None)
                     st.rerun()
                 else:
-                    st.error(t["password_wrong"])
+                    st.error("❌ Invalid restaurant name or password.")
+
+        # --- TAB 2: SELF-SERVE RESTAURANT REGISTRATION ---
+        with tab_signup:
+            st.subheader("🏪 Register Your Restaurant")
+            st.caption("Create a private workspace for your venue. Only you will have access to your data and forecasts.")
+            new_rest_name = st.text_input(
+                "Restaurant / Venue Name",
+                placeholder="e.g. Harbor Bistro Sydney",
+                key="signup_rest_name",
+            ).strip()
+            new_pw1 = st.text_input(
+                "Create Password (min. 6 characters)",
+                type="password",
+                key="signup_pw1",
+            )
+            new_pw2 = st.text_input(
+                "Confirm Password",
+                type="password",
+                key="signup_pw2",
+            )
+
+            if st.button("🚀 Create Account & Continue", key="signup_submit_btn", type="primary", use_container_width=True):
+                new_slug = storage.slugify(new_rest_name) if new_rest_name else ""
+                if not new_rest_name or new_slug in {"default", "admin", "administrator"}:
+                    st.error("Please enter a valid restaurant name.")
+                elif storage.location_exists(new_slug):
+                    st.error("⚠️ An account with this restaurant name already exists. Please sign in.")
+                elif len(new_pw1) < 6:
+                    st.error("⚠️ Password must be at least 6 characters long.")
+                elif new_pw1 != new_pw2:
+                    st.error("⚠️ Passwords do not match.")
+                else:
+                    storage.save_settings(new_slug, {
+                        "name": new_rest_name,
+                        "language": selected_lang,
+                        "country": "US",
+                        "station": "New York",
+                        "currency": "$",
+                        "temp_unit": "F",
+                        "password_hash": storage.hash_password(new_pw1),
+                    })
+                    storage.sync_to_cloud(new_slug)
+                    st.session_state.authed = True
+                    st.session_state.auth_role = "client"
+                    st.session_state.locked_slug = new_slug
+                    st.session_state["flash"] = ("success", f"🎉 Welcome, {new_rest_name}! Your private account is ready.")
+                    st.rerun()
     st.stop()
 
 # ============================================================================
@@ -480,11 +552,8 @@ else:
 
 settings = storage.load_settings(slug) if slug in saved_names else {}
 
-new_loc_password = ""
-if st.session_state.auth_role == "admin":
-    pw_status = "✅ Password set (type to change)" if settings.get("password_hash") else "🔑 Set Location Password (optional)"
-    new_loc_password = st.sidebar.text_input(pw_status, type="password", key=f"loc_pw_{slug}").strip()
-
+pw_status = "🔑 Change Password (optional)" if settings.get("password_hash") else "🔑 Set Account Password"
+new_loc_password = st.sidebar.text_input(pw_status, type="password", key=f"loc_pw_{slug}").strip()
 st.sidebar.header(t["upload_header"])
 uploaded_file = st.sidebar.file_uploader(t["upload_prompt"], type=["csv"], key="csv_file_uploader")
 st.sidebar.markdown(t["req_format"])
@@ -492,18 +561,98 @@ st.sidebar.markdown(t["req_format"])
 st.sidebar.markdown("---")
 st.sidebar.subheader(t["settings_header"])
 country_codes = list(COUNTRY_NAMES)
+default_country_idx = country_codes.index(settings["country"]) if settings.get("country") in country_codes else 0
 country = st.sidebar.selectbox(
     t["country_label"], country_codes,
-    index=country_codes.index(settings["country"]) if settings.get("country") in country_codes else 2,
+    index=default_country_idx,
     format_func=lambda c: f"{COUNTRY_NAMES[c]} ({c})", key=f"country_{slug}",
 )
-station = st.sidebar.text_input(t["station_label"], value=settings.get("station", "Vienna"), key=f"station_{slug}").strip()
+
+# Preset cities for selected country + ability to type any custom city or postal/ZIP code
+preset_cities = COUNTRY_CITIES.get(country, ["Vienna"])
+saved_station = settings.get("station", preset_cities[0])
+city_options = preset_cities + ["✍️ Type any city or ZIP code..."]
+default_city_idx = preset_cities.index(saved_station) if saved_station in preset_cities else len(preset_cities)
+
+picked_city = st.sidebar.selectbox(
+    "🏙️ Select City",
+    city_options,
+    index=default_city_idx,
+    key=f"city_preset_{slug}_{country}",
+)
+if picked_city == "✍️ Type any city or ZIP code...":
+    custom_default = saved_station if saved_station not in preset_cities else ""
+    station = st.sidebar.text_input(
+        t["station_label"],
+        value=custom_default,
+        placeholder="e.g. Scottsdale, Gold Coast, 90210...",
+        key=f"station_custom_{slug}",
+    ).strip() or preset_cities[0]
+else:
+    station = picked_city
+
+# Live urllib Geocoding verification badge so the user sees the automatic connection
+geo_info = core.resolve_location_info(station, country)
+# State / Territory Public Holiday Calendar (Auto-detected from City or Manual Override)
+subdiv_code = ""
+if country in COUNTRY_SUBDIVISIONS:
+    subdiv_map = COUNTRY_SUBDIVISIONS[country]
+    subdiv_labels = list(subdiv_map.keys())
+    saved_subdiv = settings.get("subdiv", "")
+    default_sub_idx = 0
+    for idx_s, code_s in enumerate(subdiv_map.values()):
+        if code_s and code_s == saved_subdiv:
+            default_sub_idx = idx_s
+            break
+    picked_subdiv_label = st.sidebar.selectbox(
+        "🏛️ State / Territory Holidays",
+        subdiv_labels,
+        index=default_sub_idx,
+        key=f"subdiv_{slug}_{country}",
+    )
+    subdiv_code = subdiv_map[picked_subdiv_label]
+
+if not subdiv_code and geo_info.get("admin1"):
+    subdiv_code = ADMIN1_TO_SUBDIV.get(geo_info["admin1"], "")
+
+holiday_country = f"{country}-{subdiv_code}" if subdiv_code else country
+if subdiv_code:
+    st.sidebar.caption(f"🗓️ **Holiday Calendar:** `{holiday_country}` (includes state holidays)")
+if geo_info["matched"]:
+    region_str = f", {geo_info['admin1']}" if geo_info["admin1"] else ""
+    st.sidebar.caption(
+        f"📡 **Weather Connected:** {geo_info['name']}{region_str} ({geo_info['country_code']}) "
+        f"`[{geo_info['lat']:.2f}, {geo_info['lon']:.2f}]`"
+    )
+else:
+    st.sidebar.caption(f"⚠️ Using capital coordinates for {COUNTRY_NAMES.get(country, country)}")
+
+# Currency & Temperature Unit Toggles
+unit_col1, unit_col2 = st.sidebar.columns(2)
+default_curr = settings.get("currency") or COUNTRY_CURRENCIES.get(country, "$")
+curr_idx = CURRENCY_OPTIONS.index(default_curr) if default_curr in CURRENCY_OPTIONS else 0
+currency = unit_col1.selectbox(
+    "💱 Currency",
+    CURRENCY_OPTIONS,
+    index=curr_idx,
+    key=f"currency_select_{slug}_{country}",
+)
+
+default_temp_unit = settings.get("temp_unit") or ("F" if country == "US" else "C")
+temp_unit_label = unit_col2.radio(
+    "🌡️ Units",
+    ["°C / mm", "°F / in"],
+    index=1 if default_temp_unit == "F" else 0,
+    horizontal=True,
+    key=f"temp_unit_{slug}_{country}",
+)
+temp_unit = "F" if "°F" in temp_unit_label else "C"
+
 lunch_share = st.sidebar.slider(t["lunch_share"], 0, 100, int(settings.get("lunch_share", 40)), key=f"lunch_{slug}")
 weekend_lunch_share = st.sidebar.slider(
     t.get("weekend_lunch_share", "Weekend Lunch Share (%)"),
     0, 100, int(settings.get("weekend_lunch_share", lunch_share)), key=f"wknd_lunch_{slug}",
 )
-currency = COUNTRY_CURRENCIES.get(country, "€")
 avg_spend = st.sidebar.number_input(
     t["avg_spend"].replace("€", currency),
     min_value=0.0, value=float(settings.get("avg_spend", 25.0)), step=1.0, key=f"spend_{slug}",
@@ -598,6 +747,7 @@ if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_con
         storage.save_visits(slug, visits)
         storage.save_settings(slug, {
             "name": loc_name, "language": selected_lang, "country": country, "station": station,
+            "currency": currency, "temp_unit": temp_unit,
             "lunch_share": lunch_share, "weekend_lunch_share": weekend_lunch_share,
             "avg_spend": avg_spend, "dinner_spend": dinner_spend,
             "guests_per_server": int(guests_per_server),
@@ -613,7 +763,7 @@ if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_con
 # Model Training & Future Forecast Calculation
 # ============================================================================
 with st.spinner(t["spinner"]):
-    bundle = cached_train(visits, station, country, saved_events)
+    bundle = cached_train(visits, station, holiday_country, saved_events)
 if bundle is None:
     st.error(t["err_training"])
     st.stop()
@@ -726,8 +876,16 @@ with tab_plan:
     if st.session_state.get("manual_weather_checkbox", False):
         default_temp, _ = core.default_weather(history)
         col_b1, col_b2 = st.columns(2)
-        col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
-        col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
+        if temp_unit == "F":
+            temp_f_val = col_b1.slider(
+                "Avg Week Temp (°F)", 14.0, 104.0, round(c_to_f(default_temp), 1), key="temp_slider_f"
+            )
+            st.session_state["temp_slider_input"] = f_to_c(temp_f_val)
+            rain_in_val = col_b2.slider("Avg Week Rain (in)", 0.0, 2.0, 0.0, step=0.05, key="rain_slider_in")
+            st.session_state["rain_slider_input"] = rain_in_val * 25.4
+        else:
+            col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
+            col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
 
     # 7-Day Visual Weather & Driver Strip
     holiday_set = set(bundle["forecaster"].holiday_dates)
@@ -745,7 +903,7 @@ with tab_plan:
             f'<div class="day-name">{DAYS[d.dayofweek][:3]}</div>'
             f'<div class="day-date">{MONTHS[d.month - 1]} {d.day:02d}</div>'
             f'<div class="day-wx">{icon}</div>'
-            f'<div class="day-temp">{temp_val:.0f}°C • {rain_val:.1f}mm</div>'
+            f'<div class="day-temp">{fmt_temp(temp_val, temp_unit)} • {fmt_rain(rain_val, temp_unit)}</div>'
             f'<div class="day-guests">{guest_txt}</div>'
             f'<div class="day-tag">{driver}</div>'
             f'</div>'
