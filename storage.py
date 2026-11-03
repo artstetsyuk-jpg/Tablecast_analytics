@@ -81,15 +81,21 @@ def save_events(slug, events):
 
 
 def list_locations():
-    """[(slug, display_name), ...] for every location that has saved history."""
+    """[(slug, display_name), ...] for every location that has saved history or settings."""
     root = data_dir() / "locations"
     if not root.exists():
         return []
     found = []
     for folder in sorted(root.iterdir()):
-        if folder.is_dir() and (folder / "visits.csv").exists():
+        if folder.is_dir() and ((folder / "visits.csv").exists() or (folder / "settings.json").exists()):
             found.append((folder.name, load_settings(folder.name).get("name", folder.name)))
     return found
+
+
+def location_exists(slug: str) -> bool:
+    """Return True if a restaurant slug already has saved settings or password."""
+    folder = _location_dir(slugify(slug))
+    return (folder / "settings.json").exists() or (folder / "visits.csv").exists()
 
 
 def load_visits(slug):
