@@ -14,6 +14,8 @@ COUNTRY_NAMES = {
     "IT": "Italy",
     "ES": "Spain",
     "NL": "Netherlands",
+    "PH": "Philippines",
+    "PH": "₱"
 }
 
 COUNTRY_CURRENCIES = {
