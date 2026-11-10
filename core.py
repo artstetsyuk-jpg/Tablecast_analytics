@@ -121,40 +121,71 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
 
 
 CAPITAL_COORDS = {
-    "FR": (48.8566, 2.3522),
-    "DE": (52.5200, 13.4050),
-    "AT": (48.2082, 16.3738),
-    "CH": (47.3769, 8.5417),
-    "BE": (50.8503, 4.3517),
-    "IT": (41.9028, 12.4964),
-    "ES": (40.4168, -3.7038),
-    "NL": (52.3676, 4.9041),
-    "GB": (51.5074, -0.1278),
+    "US": (40.7128, -74.0060),   # New York
+    "AU": (-33.8688, 151.2093),  # Sydney
+    "GB": (51.5074, -0.1278),    # London
+    "CA": (43.6532, -79.3832),   # Toronto
+    "NZ": (-36.8485, 174.7633),  # Auckland
+    "FR": (48.8566, 2.3522),     # Paris
+    "DE": (52.5200, 13.4050),    # Berlin
+    "AT": (48.2082, 16.3738),    # Vienna
+    "CH": (47.3769, 8.5417),     # Zurich
+    "BE": (50.8503, 4.3517),     # Brussels
+    "IT": (41.9028, 12.4964),    # Rome
+    "ES": (40.4168, -3.7038),    # Madrid
+    "NL": (52.3676, 4.9041),     # Amsterdam
+    "PH": (14.5995, 120.9842),
 }
 
 
-@lru_cache(maxsize=256)
-def resolve_location_coords(location_query, country="FR"):
-    """Resolve a city name or postal code to (lat, lon) via Open-Meteo Geocoding API.
-    Cached in-memory so repeated runs never re-query the geocoder for the same station."""
+@lru_cache(maxsize=512)
+def resolve_location_info(location_query, country="US"):
+    """Resolve any city name or postal/ZIP code via urllib + Open-Meteo Geocoding API.
+    Returns dict with: lat, lon, name, admin1 (state/region), country_code, matched (bool)."""
     query = str(location_query or "").strip()
-    if not query or query.isdigit():
-        return CAPITAL_COORDS.get(country, CAPITAL_COORDS["FR"])
+    base_country = str(country or "US").split("-", 1)[0].strip().upper()
+    fallback_lat, fallback_lon = CAPITAL_COORDS.get(base_country, CAPITAL_COORDS["US"])
+
+    if not query:
+        return {
+            "lat": fallback_lat, "lon": fallback_lon,
+            "name": base_country, "admin1": "", "country_code": base_country, "matched": False,
+        }
 
     for use_country in (True, False):
-        params = {"name": query, "count": 1, "language": "en", "format": "json"}
-        if use_country and country:
-            params["countryCode"] = country
+        params = {"name": query, "count": 5, "language": "en", "format": "json"}
+        if use_country and base_country:
+            params["countryCode"] = base_country
         url = f"https://geocoding-api.open-meteo.com/v1/search?{urllib.parse.urlencode(params)}"
         try:
-            with urllib.request.urlopen(url, timeout=8) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "TableCastAI/2.5"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             results = payload.get("results")
             if results:
-                return float(results[0]["latitude"]), float(results[0]["longitude"])
+                hit = results[0]
+                return {
+                    "lat": float(hit["latitude"]),
+                    "lon": float(hit["longitude"]),
+                    "name": hit.get("name", query),
+                    "admin1": hit.get("admin1", ""),
+                    "country_code": hit.get("country_code", base_country),
+                    "matched": True,
+                }
         except Exception:
             break
-    return CAPITAL_COORDS.get(country, CAPITAL_COORDS["FR"])
+
+    return {
+        "lat": fallback_lat, "lon": fallback_lon,
+        "name": query, "admin1": "", "country_code": base_country, "matched": False,
+    }
+
+
+@lru_cache(maxsize=512)
+def resolve_location_coords(location_query, country="FR"):
+    """Return (lat, lon) tuple for backward compatibility with training and weather fetchers."""
+    info = resolve_location_info(location_query, country)
+    return info["lat"], info["lon"]
 
 
 @lru_cache(maxsize=256)
@@ -256,17 +287,31 @@ def fetch_future_weather(station, country, future_dates, history):
 # ----------------------------------------------------------------------------
 # Features (single source of truth for training AND forecasting)
 # ----------------------------------------------------------------------------
-def school_break_flags(idx):
-    """Rough school-holiday / tourism-season flag."""
+def school_break_flags(idx, country="FR"):
+    """Rough school-holiday / tourism-season flag (supports both Northern and Southern hemispheres)."""
     m, d = idx.month.to_numpy(), idx.day.to_numpy()
-    flag = (
-        ((m == 4) & (d >= 10) & (d <= 25))
-        | np.isin(m, [7, 8])
-        | ((m == 12) & (d >= 20))
-        | ((m == 1) & (d <= 6))
-        | ((m == 2) & (d >= 10) & (d <= 25))
-        | ((m == 10) & (d >= 24))
-    )
+    base_country = str(country or "FR").split("-", 1)[0].strip().upper()
+
+    if base_country in {"AU", "NZ"}:
+        # Southern Hemisphere school holidays: Dec 15 - Jan 28 (Summer), mid-Apr, early Jul, late Sep/early Oct
+        flag = (
+            ((m == 12) & (d >= 15))
+            | ((m == 1) & (d <= 28))
+            | ((m == 4) & (d >= 10) & (d <= 25))
+            | ((m == 7) & (d >= 1) & (d <= 16))
+            | ((m == 9) & (d >= 20))
+            | ((m == 10) & (d <= 8))
+        )
+    else:
+        # Northern Hemisphere (US / Europe / Canada / UK)
+        flag = (
+            ((m == 4) & (d >= 10) & (d <= 25))
+            | np.isin(m, [7, 8])
+            | ((m == 12) & (d >= 20))
+            | ((m == 1) & (d <= 6))
+            | ((m == 2) & (d >= 10) & (d <= 25))
+            | ((m == 10) & (d >= 24))
+        )
     return flag.astype(int)
 
 
@@ -282,7 +327,7 @@ def get_holiday_dates(country, calendar_index):
     return pd.DatetimeIndex(pd.to_datetime(list(hol.keys())))
 
 
-def build_features(frame, holiday_dates):
+def build_features(frame, holiday_dates, country="FR"):
     """frame: daily-calendar DataFrame with columns visitors (NaN = closed/unknown), temp, rain.
     Every lag uses only data from BEFORE the row's own day."""
     idx = frame.index
@@ -298,7 +343,7 @@ def build_features(frame, holiday_dates):
     out["is_payday"] = ((day == 1) | (day == 15) | (day >= 25) | (day >= days_in_month - 2)).astype(int)
     out["is_holiday"] = idx.isin(holiday_dates).astype(int)
     out["is_holiday_tomorrow"] = (idx + pd.Timedelta(days=1)).isin(holiday_dates).astype(int)
-    out["is_school_break"] = school_break_flags(idx)
+    out["is_school_break"] = school_break_flags(idx, country)
     out["temp"] = frame["temp"].to_numpy()
     out["rain"] = frame["rain"].to_numpy()
     out["rain_weekend_penalty"] = out["rain"] * out["is_weekend"]
@@ -374,14 +419,15 @@ def fit_forest(X, y):
 
 
 @dataclass
+@dataclass
 class Forecaster:
     model: object
     holiday_dates: pd.DatetimeIndex
     closed_weekdays: frozenset
     medians: pd.Series
+    country: str = "FR"
 
-    def forecast(self, history, future_weather):
-        """Recursive multi-day forecast."""
+    def forecast(self, history: pd.DataFrame, future_weather: pd.DataFrame) -> pd.Series:
         frame = history[["visitors", "temp", "rain"]].copy()
         preds = {}
         for d, w in future_weather.iterrows():
@@ -389,7 +435,7 @@ class Forecaster:
             if d.dayofweek in self.closed_weekdays:
                 preds[d] = np.nan
                 continue
-            feats = build_features(frame.tail(LOOKBACK_DAYS), self.holiday_dates)
+            feats = build_features(frame.tail(LOOKBACK_DAYS), self.holiday_dates, self.country)
             X = feats[FEATURES].iloc[[-1]].fillna(self.medians)
             pred = max(0.0, float(self.model.predict(X)[0]))
             frame.loc[d, "visitors"] = pred
@@ -482,7 +528,7 @@ def train_bundle(visits, station, country, events=None):
 
     holiday_dates = get_holiday_dates(country, calendar)
     closed = detect_closed_weekdays(visits, calendar)
-    features = build_features(history, holiday_dates)
+    features = build_features(history, holiday_dates, country)
 
     usable = history["visitors"].notna() & features[FEATURES].notna().all(axis=1)
     X, y = features.loc[usable, FEATURES], history.loc[usable, "visitors"]
@@ -493,7 +539,7 @@ def train_bundle(visits, station, country, events=None):
     n_train = int(len(X) * (1 - TEST_FRACTION))
     X_train, X_test, y_train, y_test = X.iloc[:n_train], X.iloc[n_train:], y.iloc[:n_train], y.iloc[n_train:]
     val_model = fit_forest(X_train, y_train)
-    val_forecaster = Forecaster(val_model, holiday_dates, closed, X_train.median())
+    val_forecaster = Forecaster(val_model, holiday_dates, closed, X_train.median(), country)
 
     preds = val_model.predict(X_test)
     baseline = X_test["visitors_same_day_last_week"].to_numpy()
@@ -510,7 +556,7 @@ def train_bundle(visits, station, country, events=None):
     dow_means = visits.groupby(visits["visit_date"].dt.dayofweek)["visitors"].mean().reindex(range(7)).fillna(0.0)
 
     return {
-        "forecaster": Forecaster(final_model, holiday_dates, closed, X.median()),
+        "forecaster": Forecaster(final_model, holiday_dates, closed, X.median(), country),
         "history": history,
         "closed_weekdays": closed,
         "mean_visitors": float(visits["visitors"].mean()),
