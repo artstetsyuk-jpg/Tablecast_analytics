@@ -432,111 +432,93 @@ if flash:
 saved_locations = storage.list_locations()
 saved_names = dict(saved_locations)
 app_password = get_secret("APP_PASSWORD")
-need_login = (
-    bool(app_password)
-    or storage.has_any_location_passwords()
-    or st.session_state.get("force_login", False)
-) and not st.session_state.get("use_demo", False)
+need_login = bool(app_password) or storage.has_any_location_passwords() or st.session_state.get("force_login", False)
 
-if need_login and not st.session_state.authed:
-    st.subheader("📊 TableCast Analytics — Portal")
-    tab_signin, tab_signup = st.tabs(["🔑 Sign In", "📝 Register New Business"])
+if need_login and not st.session_state.get("authed", False):
+    col_l1, col_l2, col_l3 = st.columns([1, 1.45, 1])
+    with col_l2:
+        tab_signin, tab_signup = st.tabs(["🔑 Sign In", "✨ Create Restaurant Account"])
 
-    # --- TAB 1: PRIVATE SIGN IN ---
-    with tab_signin:
-        st.subheader("🔐 Sign In to Your Restaurant")
-        login_name = st.text_input(
-            "Restaurant Name",
-            placeholder="Enter your restaurant name...",
-            key="login_rest_name",
-        ).strip()
-        entered_pw = st.text_input(
-            t["password_prompt"],
-            type="password",
-            key="password_input",
-        )
+        # --- TAB 1: PRIVATE SIGN IN ---
+        with tab_signin:
+            st.subheader("🔐 Sign In to Your Restaurant")
+            login_name = st.text_input(
+                "Restaurant Name",
+                placeholder="Enter your restaurant name...",
+                key="login_rest_name",
+            ).strip()
+            entered_pw = st.text_input(
+                t["password_prompt"],
+                type="password",
+                key="password_input",
+            )
 
-        if st.button("🔓 Sign In", key="login_submit_btn", type="primary", use_container_width=True):
-            target_slug = storage.slugify(login_name) if login_name else ""
-            if login_name.lower() in {"admin", "administrator"} and app_password:
-                if hmac.compare_digest(entered_pw.encode("utf-8"), str(app_password).encode("utf-8")):
+            if st.button("🔓 Sign In", key="login_submit_btn", type="primary", use_container_width=True):
+                target_slug = storage.slugify(login_name) if login_name else ""
+                if login_name.lower() in {"admin", "administrator"} and app_password:
+                    if hmac.compare_digest(entered_pw.encode("utf-8"), str(app_password).encode("utf-8")):
+                        st.session_state.authed = True
+                        st.session_state.auth_role = "admin"
+                        st.session_state.locked_slug = None
+                        st.session_state.pop("password_input", None)
+                        st.rerun()
+                    else:
+                        st.error(t["password_wrong"])
+                elif target_slug and storage.verify_location_password(target_slug, entered_pw):
                     st.session_state.authed = True
-                    st.session_state.auth_role = "admin"
-                    st.session_state.locked_slug = None
-                    st.session_state.force_login = False
-                    st.session_state.use_demo = False
+                    st.session_state.auth_role = "client"
+                    st.session_state.locked_slug = target_slug
                     st.session_state.pop("password_input", None)
                     st.rerun()
                 else:
-                    st.error(t["password_wrong"])
-            elif target_slug and storage.verify_location_password(target_slug, entered_pw):
-                st.session_state.authed = True
-                st.session_state.auth_role = "client"
-                st.session_state.locked_slug = target_slug
-                st.session_state.force_login = False
-                st.session_state.use_demo = False
-                st.session_state.pop("password_input", None)
-                st.rerun()
-            else:
-                st.error("❌ Invalid restaurant name or password.")
+                    st.error("❌ Invalid restaurant name or password.")
 
-    # --- TAB 2: SELF-SERVE RESTAURANT REGISTRATION ---
-    with tab_signup:
-        st.subheader("🏪 Register Your Restaurant")
-        st.caption("Create a private workspace for your venue. Only you will have access to your data and forecasts.")
-        new_rest_name = st.text_input(
-            "Restaurant / Venue Name",
-            placeholder="e.g. Harbor Bistro Sydney",
-            key="signup_rest_name",
-        ).strip()
-        new_pw1 = st.text_input(
-            "Create Password (min. 6 characters)",
-            type="password",
-            key="signup_pw1",
-        )
-        new_pw2 = st.text_input(
-            "Confirm Password",
-            type="password",
-            key="signup_pw2",
-        )
+        # --- TAB 2: SELF-SERVE RESTAURANT REGISTRATION ---
+        with tab_signup:
+            st.subheader("🏪 Register Your Restaurant")
+            st.caption("Create a private workspace for your venue. Only you will have access to your data and forecasts.")
+            new_rest_name = st.text_input(
+                "Restaurant / Venue Name",
+                placeholder="e.g. Harbor Bistro Sydney",
+                key="signup_rest_name",
+            ).strip()
+            new_pw1 = st.text_input(
+                "Create Password (min. 6 characters)",
+                type="password",
+                key="signup_pw1",
+            )
+            new_pw2 = st.text_input(
+                "Confirm Password",
+                type="password",
+                key="signup_pw2",
+            )
 
-        if st.button("🚀 Create Account & Continue", key="signup_submit_btn", type="primary", use_container_width=True):
-            new_slug = storage.slugify(new_rest_name) if new_rest_name else ""
-            if not new_rest_name or new_slug in {"default", "admin", "administrator"}:
-                st.error("Please enter a valid restaurant name.")
-            elif storage.location_exists(new_slug):
-                st.error("⚠️ An account with this restaurant name already exists. Please sign in.")
-            elif len(new_pw1) < 6:
-                st.error("⚠️ Password must be at least 6 characters long.")
-            elif new_pw1 != new_pw2:
-                st.error("⚠️ Passwords do not match.")
-            else:
-                storage.save_settings(new_slug, {
-                    "name": new_rest_name,
-                    "language": selected_lang,
-                    "country": "US",
-                    "station": "New York",
-                    "currency": "$",
-                    "temp_unit": "F",
-                    "password_hash": storage.hash_password(new_pw1),
-                })
-                storage.sync_to_cloud(new_slug)
-                st.session_state.authed = True
-                st.session_state.auth_role = "client"
-                st.session_state.locked_slug = new_slug
-                st.session_state.force_login = False
-                st.session_state.use_demo = False
-                st.session_state["flash"] = ("success", f"🎉 Welcome, {new_rest_name}! Your private account is ready.")
-                st.rerun()
-
-    # --- LIVE DEMO BYPASS (No Account Required) ---
-    st.markdown("---")
-    if st.button("👀 Try Interactive Live Demo (No Account Needed)", key="login_demo_btn", use_container_width=True):
-        st.session_state.use_demo = True
-        st.session_state.ai_trained = True
-        st.session_state.force_login = False
-        st.rerun()
-
+            if st.button("🚀 Create Account & Continue", key="signup_submit_btn", type="primary", use_container_width=True):
+                new_slug = storage.slugify(new_rest_name) if new_rest_name else ""
+                if not new_rest_name or new_slug in {"default", "admin", "administrator"}:
+                    st.error("Please enter a valid restaurant name.")
+                elif storage.location_exists(new_slug):
+                    st.error("⚠️ An account with this restaurant name already exists. Please sign in.")
+                elif len(new_pw1) < 6:
+                    st.error("⚠️ Password must be at least 6 characters long.")
+                elif new_pw1 != new_pw2:
+                    st.error("⚠️ Passwords do not match.")
+                else:
+                    storage.save_settings(new_slug, {
+                        "name": new_rest_name,
+                        "language": selected_lang,
+                        "country": "US",
+                        "station": "New York",
+                        "currency": "$",
+                        "temp_unit": "F",
+                        "password_hash": storage.hash_password(new_pw1),
+                    })
+                    storage.sync_to_cloud(new_slug)
+                    st.session_state.authed = True
+                    st.session_state.auth_role = "client"
+                    st.session_state.locked_slug = new_slug
+                    st.session_state["flash"] = ("success", f"🎉 Welcome, {new_rest_name}! Your private account is ready.")
+                    st.rerun()
     st.stop()
 
 # ============================================================================
@@ -764,14 +746,10 @@ if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_con
     else:
         storage.save_visits(slug, visits)
         storage.save_settings(slug, {
-            "name": loc_name,
-            "language": selected_lang,
-            "country": country,
-            "subdiv": subdiv,        # <-- ADD THIS LINE (use subdiv_code if yours is named subdiv_code)
-            "currency": currency,    # <-- ADD THIS LINE
-            "station": station,
-            "lunch_share": lunch_share,
-            "avg_spend": avg_spend,
+            "name": loc_name, "language": selected_lang, "country": country, "station": station,
+            "currency": currency, "temp_unit": temp_unit,
+            "lunch_share": lunch_share, "weekend_lunch_share": weekend_lunch_share,
+            "avg_spend": avg_spend, "dinner_spend": dinner_spend,
             "guests_per_server": int(guests_per_server),
             "recipients": recipients_text,
             "password_hash": storage.hash_password(new_loc_password) if new_loc_password else settings.get("password_hash", ""),
@@ -872,8 +850,9 @@ st.markdown(
 # ============================================================================
 # Workspace Tabs
 # ============================================================================
-tab_plan, tab_ai, tab_track, tab_export = st.tabs([
+tab_plan, tab_prep, tab_ai, tab_track, tab_export = st.tabs([
     t["planner_header"],
+    "🥖 Kitchen & Prep Sheet",
     "📊 AI Performance & Backtest",
     t["tracking_header"],
     "📤 PDF & Email Dispatch",
@@ -894,6 +873,60 @@ with tab_plan:
             value=not live_weather_ok,
             key="manual_weather_checkbox",
         )
+
+
+# ----------------------------------------------------------------------------
+# TAB 2: Kitchen & Bakery Prep Calculator (Separate Tab)
+# ----------------------------------------------------------------------------
+with tab_prep:
+    st.subheader("🥖 7-Day Kitchen & Bakery Prep Sheet")
+    st.caption("Define your average ingredient or item usage per guest to automatically generate daily prep targets.")
+
+    default_prep = settings.get("prep_items", [
+        {"Item": "Burger Buns / Bread Rolls", "Per Guest": 0.45, "Unit": "pcs"},
+        {"Item": "Meat / Protein Prep", "Per Guest": 0.12, "Unit": "kg"},
+        {"Item": "Croissants / Pastries", "Per Guest": 0.80, "Unit": "pcs"},
+    ])
+
+    col_p1, col_p2 = st.columns([3, 1])
+    with col_p2:
+        safety_buffer = st.slider(
+            "🛡️ Safety Buffer (%)", 0, 30, int(settings.get("prep_buffer", 10)),
+            help="Adds a cushion so you don't sell out during a rush.",
+            key=f"prep_buf_{slug}",
+        )
+    with col_p1:
+        prep_config_df = st.data_editor(
+            pd.DataFrame(default_prep),
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"prep_editor_{slug}",
+        )
+
+    if not prep_config_df.empty:
+        prep_schedule = []
+        for row in plan:
+            d = row["date"]
+            day_entry = {
+                "Date": f"{DAYS[d.dayofweek][:3]}, {MONTHS[d.month - 1]} {d.day:02d}",
+                "Expected Guests": 0 if row["is_closed"] else row["expected"],
+            }
+            for _, item_row in prep_config_df.iterrows():
+                item_name = str(item_row.get("Item", "")).strip()
+                rate = float(item_row.get("Per Guest") or 0.0)
+                unit = str(item_row.get("Unit", "")).strip()
+                if item_name:
+                    if row["is_closed"]:
+                        day_entry[f"{item_name} ({unit})"] = t["closed"]
+                    else:
+                        needed = np.ceil(row["expected"] * rate * (1.0 + safety_buffer / 100.0))
+                        day_entry[f"{item_name} ({unit})"] = (
+                            f"{needed:.1f}" if unit in {"kg", "L", "lb"} else f"{int(needed)}"
+                        )
+            prep_schedule.append(day_entry)
+
+        prep_df = pd.DataFrame(prep_schedule)
+        st.dataframe(prep_df, hide_index=True, use_container_width=True)
 
     if st.session_state.get("manual_weather_checkbox", False):
         default_temp, _ = core.default_weather(history)
@@ -1055,9 +1088,7 @@ with tab_export:
         t["pdf_title"] + (f" - {loc_name}" if loc_name else ""), summary_lines, headers, pdf_rows
     )
 
-    ics_bytes = reports.build_ics(plan, location_name=loc_name or "TableCast", currency=currency)
-
-    d_col1, d_col2, d_col3 = st.columns(3)
+    d_col1, d_col2 = st.columns(2)
     with d_col1:
         st.download_button(
             label=t["download_btn"],
@@ -1074,15 +1105,6 @@ with tab_export:
             file_name="executive_forecast_report.pdf",
             mime="application/pdf",
             key="download_pdf_btn",
-            use_container_width=True,
-        )
-    with d_col3:
-        st.download_button(
-            label="📅 Download Calendar (.ics)",
-            data=ics_bytes,
-            file_name=f"{slug}_7day_schedule.ics",
-            mime="text/calendar",
-            key="download_ics_btn",
             use_container_width=True,
         )
 
