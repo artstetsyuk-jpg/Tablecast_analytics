@@ -131,3 +131,61 @@ def build_pdf(title, summary_lines, headers, rows):
             pdf.cell(width, 8, _latin1(value), border=1, align="C")
         pdf.ln()
     return bytes(pdf.output())
+
+from datetime import datetime, timedelta
+import pandas as pd
+
+def build_ics(plan, location_name: str = "TableCast", currency: str = "€") -> bytes:
+    """Generate an iCalendar (.ics) file from the 7-day forecast plan (list of dicts or DataFrame)."""
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//TableCast Analytics//7-Day Schedule//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+    ]
+    now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    items = plan.to_dict("records") if isinstance(plan, pd.DataFrame) else list(plan)
+
+    for row in items:
+        d = pd.Timestamp(row["date"])
+        dt_start = d.strftime("%Y%m%d")
+        dt_end = (d + timedelta(days=1)).strftime("%Y%m%d")
+        uid = f"tablecast-{dt_start}-{abs(hash(location_name)) % 100000}@tablecast.ai"
+
+        if row.get("is_closed", False):
+            summary = f"🔒 {location_name}: Closed"
+            desc = "Regularly scheduled closure."
+        else:
+            exp = int(row.get("expected", 0))
+            low = row.get("low")
+            high = row.get("high")
+            servers = int(row.get("servers", 0))
+            lunch = int(row.get("lunch", 0))
+            dinner = int(row.get("dinner", 0))
+            rev = float(row.get("revenue", 0.0))
+            extra = int(row.get("extra", 0))
+
+            range_str = f" (Range: {int(low)}–{int(high)})" if low is not None and high is not None else ""
+            event_badge = f" (+{extra} Private Event)" if extra > 0 else ""
+            summary = f"🍽️ {exp} pax ({servers} Staff){event_badge} — {location_name}"
+            desc = (
+                f"Expected Traffic: {exp} guests{range_str}\\n"
+                f"Shift Split: Lunch {lunch} | Dinner {dinner}\\n"
+                f"Recommended FOH Staff: {servers} servers\\n"
+                f"Projected Revenue: {currency}{rev:,.2f}"
+            )
+
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{now_str}",
+            f"DTSTART;VALUE=DATE:{dt_start}",
+            f"DTEND;VALUE=DATE:{dt_end}",
+            f"SUMMARY:{summary}",
+            f"DESCRIPTION:{desc}",
+            "END:VEVENT",
+        ])
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines).encode("utf-8")
