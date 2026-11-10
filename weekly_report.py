@@ -31,11 +31,11 @@ def build_location_report(slug, settings, today):
         raise ValueError(
             f"newest saved data is from {last_date.date()} ({stale_days} days old); upload recent data first"
         )
-    loc_station = settings.get("station", "Vienna")
     loc_country = settings.get("country", "AT")
-    currency = COUNTRY_CURRENCIES.get(loc_country, "€")
+    loc_subdiv = settings.get("subdiv", "")
+    currency = settings.get("currency") or COUNTRY_CURRENCIES.get(loc_country, "€")
     saved_events = storage.load_events(slug)
-    bundle = core.train_bundle(visits, loc_station, loc_country, events=saved_events)
+    bundle = core.train_bundle(visits, station, loc_country, events=events, subdiv=loc_subdiv)
     if bundle is None:
         raise ValueError("not enough usable history to train")
     history = bundle["history"]
