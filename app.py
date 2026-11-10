@@ -876,34 +876,96 @@ with tab_plan:
 
 
 # ----------------------------------------------------------------------------
-# TAB 2: Kitchen & Bakery Prep Calculator (Separate Tab)
+# TAB 2: Kitchen & Bakery Prep Calculator (Custom Ingredients + Presets)
 # ----------------------------------------------------------------------------
 with tab_prep:
-    st.subheader("🥖 7-Day Kitchen & Bakery Prep Sheet")
-    st.caption("Define your average ingredient or item usage per guest to automatically generate daily prep targets.")
+    st.subheader("🥖 7-Day Kitchen & Inventory Prep Sheet")
+    st.caption("Add your own custom ingredients (or load a preset) to automatically calculate daily prep targets.")
 
-    default_prep = settings.get("prep_items", [
-        {"Item": "Burger Buns / Bread Rolls", "Per Guest": 0.45, "Unit": "pcs"},
-        {"Item": "Meat / Protein Prep", "Per Guest": 0.12, "Unit": "kg"},
-        {"Item": "Croissants / Pastries", "Per Guest": 0.80, "Unit": "pcs"},
-    ])
+    PRESET_TEMPLATES = {
+        "🍔 Burger / Bistro": [
+            {"Item": "Burger Buns / Bread Rolls", "Per Guest": 0.45, "Unit": "pcs"},
+            {"Item": "Beef / Meat Prep", "Per Guest": 0.12, "Unit": "kg"},
+            {"Item": "Fries / Potatoes", "Per Guest": 0.15, "Unit": "kg"},
+        ],
+        "🥐 Bakery / Café": [
+            {"Item": "Croissants / Pastries", "Per Guest": 0.85, "Unit": "pcs"},
+            {"Item": "Espresso Beans", "Per Guest": 0.018, "Unit": "kg"},
+            {"Item": "Milk / Oat Milk", "Per Guest": 0.12, "Unit": "L"},
+        ],
+        "💪 Gym / Shake Bar": [
+            {"Item": "Creatine", "Per Guest": 5.0, "Unit": "g"},
+            {"Item": "Whey Protein", "Per Guest": 30.0, "Unit": "g"},
+            {"Item": "Bananas / Fruit", "Per Guest": 0.5, "Unit": "pcs"},
+        ],
+    }
+
+    state_key = f"prep_items_list_{slug}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = settings.get(
+            "prep_items", PRESET_TEMPLATES["🍔 Burger / Bistro"]
+        )
+
+    # --- Quick-Add Custom Ingredient Bar ---
+    with st.expander("➕ Add Custom Ingredient or Load Preset", expanded=True):
+        add_c1, add_c2, add_c3, add_c4 = st.columns([2.2, 1.2, 1, 1.2])
+        new_item_name = add_c1.text_input(
+            "Ingredient Name", placeholder="e.g. Creatine, Semmeln, Chicken...", key=f"new_ing_name_{slug}"
+        )
+        new_item_rate = add_c2.number_input(
+            "Amount per Guest", min_value=0.01, value=0.50, step=0.05, key=f"new_ing_rate_{slug}"
+        )
+        new_item_unit = add_c3.selectbox(
+            "Unit", ["pcs", "kg", "g", "L", "ml", "lb", "oz", "portions"], key=f"new_ing_unit_{slug}"
+        )
+        add_c4.write("")
+        if add_c4.button("➕ Add Item", key=f"add_ing_btn_{slug}", type="primary", use_container_width=True):
+            if new_item_name.strip():
+                st.session_state[state_key].append({
+                    "Item": new_item_name.strip(),
+                    "Per Guest": float(new_item_rate),
+                    "Unit": new_item_unit,
+                })
+                st.rerun()
+
+        pre_c1, pre_c2, pre_c3, pre_c4 = st.columns(4)
+        for idx_p, (preset_label, preset_rows) in enumerate(PRESET_TEMPLATES.items()):
+            if [pre_c1, pre_c2, pre_c3][idx_p].button(f"Load {preset_label}", key=f"pre_{idx_p}_{slug}", use_container_width=True):
+                st.session_state[state_key] = [dict(r) for r in preset_rows]
+                st.rerun()
+        if pre_c4.button("🗑️ Clear All Items", key=f"clear_ing_{slug}", use_container_width=True):
+            st.session_state[state_key] = []
+            st.rerun()
 
     col_p1, col_p2 = st.columns([3, 1])
     with col_p2:
         safety_buffer = st.slider(
             "🛡️ Safety Buffer (%)", 0, 30, int(settings.get("prep_buffer", 10)),
-            help="Adds a cushion so you don't sell out during a rush.",
+            help="Adds a cushion so you don't run out during an unexpected rush.",
             key=f"prep_buf_{slug}",
         )
     with col_p1:
         prep_config_df = st.data_editor(
-            pd.DataFrame(default_prep),
+            pd.DataFrame(st.session_state[state_key] or [{"Item": "", "Per Guest": 0.0, "Unit": "pcs"}]),
             num_rows="dynamic",
             use_container_width=True,
+            column_config={
+                "Item": st.column_config.TextColumn("Ingredient / Item Name", required=True),
+                "Per Guest": st.column_config.NumberColumn("Usage per Guest", min_value=0.0, format="%.2f"),
+                "Unit": st.column_config.SelectboxColumn(
+                    "Unit", options=["pcs", "kg", "g", "L", "ml", "lb", "oz", "portions"]
+                ),
+            },
             key=f"prep_editor_{slug}",
         )
+        st.session_state[state_key] = prep_config_df.to_dict("records")
 
-    if not prep_config_df.empty:
+    # --- 7-Day Calculated Prep Schedule ---
+    valid_items = [
+        r for _, r in prep_config_df.iterrows()
+        if str(r.get("Item", "")).strip() and pd.notna(r.get("Per Guest"))
+    ]
+    if valid_items:
         prep_schedule = []
         for row in plan:
             d = row["date"]
@@ -911,87 +973,24 @@ with tab_prep:
                 "Date": f"{DAYS[d.dayofweek][:3]}, {MONTHS[d.month - 1]} {d.day:02d}",
                 "Expected Guests": 0 if row["is_closed"] else row["expected"],
             }
-            for _, item_row in prep_config_df.iterrows():
-                item_name = str(item_row.get("Item", "")).strip()
-                rate = float(item_row.get("Per Guest") or 0.0)
-                unit = str(item_row.get("Unit", "")).strip()
-                if item_name:
-                    if row["is_closed"]:
-                        day_entry[f"{item_name} ({unit})"] = t["closed"]
+            for item_row in valid_items:
+                item_name = str(item_row["Item"]).strip()
+                rate = float(item_row["Per Guest"] or 0.0)
+                unit = str(item_row.get("Unit") or "pcs").strip()
+                if row["is_closed"]:
+                    day_entry[f"{item_name} ({unit})"] = t["closed"]
+                else:
+                    raw_needed = row["expected"] * rate * (1.0 + safety_buffer / 100.0)
+                    if unit in {"kg", "L", "lb"}:
+                        day_entry[f"{item_name} ({unit})"] = f"{raw_needed:.1f}"
                     else:
-                        needed = np.ceil(row["expected"] * rate * (1.0 + safety_buffer / 100.0))
-                        day_entry[f"{item_name} ({unit})"] = (
-                            f"{needed:.1f}" if unit in {"kg", "L", "lb"} else f"{int(needed)}"
-                        )
+                        day_entry[f"{item_name} ({unit})"] = f"{int(np.ceil(raw_needed))}"
             prep_schedule.append(day_entry)
 
         prep_df = pd.DataFrame(prep_schedule)
         st.dataframe(prep_df, hide_index=True, use_container_width=True)
-
-    if st.session_state.get("manual_weather_checkbox", False):
-        default_temp, _ = core.default_weather(history)
-        col_b1, col_b2 = st.columns(2)
-        if temp_unit == "F":
-            temp_f_val = col_b1.slider(
-                "Avg Week Temp (°F)", 14.0, 104.0, round(c_to_f(default_temp), 1), key="temp_slider_f"
-            )
-            st.session_state["temp_slider_input"] = f_to_c(temp_f_val)
-            rain_in_val = col_b2.slider("Avg Week Rain (in)", 0.0, 2.0, 0.0, step=0.05, key="rain_slider_in")
-            st.session_state["rain_slider_input"] = rain_in_val * 25.4
-        else:
-            col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
-            col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
-
-    # 7-Day Visual Weather & Driver Strip
-    holiday_set = set(bundle["forecaster"].holiday_dates)
-    cards_html = ['<div class="day-strip">']
-    for row in plan:
-        d = row["date"]
-        wx_row = future_weather.loc[d]
-        temp_val, rain_val = float(wx_row["temp"]), float(wx_row["rain"])
-        icon = weather_icon(temp_val, rain_val)
-        driver = explain_day_driver(d, temp_val, rain_val, holiday_set, row["on_event"], row["is_closed"])
-        closed_cls = " day-card-closed" if row["is_closed"] else ""
-        guest_txt = t["closed"] if row["is_closed"] else f"{row['expected']}"
-        cards_html.append(
-            f'<div class="day-card{closed_cls}">'
-            f'<div class="day-name">{DAYS[d.dayofweek][:3]}</div>'
-            f'<div class="day-date">{MONTHS[d.month - 1]} {d.day:02d}</div>'
-            f'<div class="day-wx">{icon}</div>'
-            f'<div class="day-temp">{fmt_temp(temp_val, temp_unit)} • {fmt_rain(rain_val, temp_unit)}</div>'
-            f'<div class="day-guests">{guest_txt}</div>'
-            f'<div class="day-tag">{driver}</div>'
-            f'</div>'
-        )
-    cards_html.append("</div>")
-    st.markdown("".join(cards_html), unsafe_allow_html=True)
-
-    show_range = bundle["intervals"] is not None
-    headers, table_rows, pdf_rows = reports.format_plan(plan, t, DAYS, MONTHS, show_range, currency=currency)
-    forecast_df = pd.DataFrame(table_rows)
-
-    max_traffic = max([r["expected"] for r in plan] + [1])
-    rev_col = f"{t['col_revenue']} ({currency})" if currency else t["col_revenue"]
-
-    st.dataframe(
-        forecast_df,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            t["col_traffic"]: st.column_config.ProgressColumn(
-                t["col_traffic"],
-                format="%d",
-                min_value=0,
-                max_value=int(max_traffic * 1.15),
-            ),
-            rev_col: st.column_config.NumberColumn(
-                rev_col,
-                format=f"{currency}%.2f",
-            ),
-        },
-    )
-    if show_range:
-        st.caption(t["range_caption"])
+    else:
+        st.info("👆 Add at least one ingredient above to generate your 7-day prep schedule.")
 
 # ----------------------------------------------------------------------------
 # TAB 2: AI Backtest Chart & Day-of-Week Signature Altair Visuals
