@@ -1,0 +1,281 @@
+/* TableCast look. Colors match .streamlit/config.toml and the chart palette in ui.py. */
+:root {
+    --tc-ink: #1C1917;
+    --tc-ink-2: #44403C;
+    --tc-muted: #78716C;
+    --tc-line: #E7E5E4;
+    --tc-card: #FFFFFF;
+    --tc-accent: #C2410C;
+    --tc-accent-soft: #FFF1E6;
+    --tc-accent-line: #FED7AA;
+    --tc-good: #15803D;
+    --tc-good-soft: #ECFDF3;
+    --tc-warn: #B45309;
+    --tc-warn-soft: #FFF7E6;
+    --tc-radius: 14px;
+    --tc-shadow: 0 1px 2px rgba(28, 25, 23, 0.04), 0 6px 18px -10px rgba(28, 25, 23, 0.14);
+    --tc-serif: 'Fraunces', Georgia, serif;
+}
+
+.block-container, [data-testid="stMainBlockContainer"] {
+    padding-top: 4.2rem !important;  /* clears Streamlit's 60px top bar */
+    padding-bottom: 3rem !important;
+    max-width: 1280px;
+}
+
+/* ---------- Page header ---------- */
+.tc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--tc-line);
+}
+.tc-eyebrow {
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tc-accent);
+    margin-bottom: 6px;
+}
+.tc-title {
+    font-family: var(--tc-serif);
+    font-size: 2.1rem;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    color: var(--tc-ink);
+    margin: 0;
+    padding: 0 !important;  /* Streamlit pads every h1 */
+}
+.tc-sub {
+    color: var(--tc-muted);
+    font-size: 0.93rem;
+    margin-top: 6px;
+}
+.tc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.tc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--tc-line);
+    background: var(--tc-card);
+    color: var(--tc-ink-2);
+    white-space: nowrap;
+}
+.tc-chip::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--tc-muted);
+}
+.tc-chip.good::before { background: var(--tc-good); }
+.tc-chip.warn::before { background: var(--tc-warn); }
+.tc-chip.accent::before { background: var(--tc-accent); }
+
+/* ---------- Callout ---------- */
+.tc-note {
+    background: var(--tc-accent-soft);
+    border: 1px solid var(--tc-accent-line);
+    color: #7C2D12;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    margin-bottom: 18px;
+}
+
+/* ---------- KPI cards ---------- */
+.tc-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+}
+.tc-kpi {
+    background: var(--tc-card);
+    border: 1px solid var(--tc-line);
+    border-radius: var(--tc-radius);
+    padding: 16px 18px;
+    box-shadow: var(--tc-shadow);
+}
+.tc-kpi-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--tc-muted);
+    margin-bottom: 6px;
+}
+.tc-kpi-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--tc-ink);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+}
+.tc-kpi-unit {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--tc-muted);
+    margin-left: 4px;
+    letter-spacing: 0;
+}
+.tc-kpi-sub { margin-top: 7px; font-size: 0.78rem; color: var(--tc-muted); }
+.tc-pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+.tc-pill.good { background: var(--tc-good-soft); color: var(--tc-good); }
+.tc-pill.warn { background: var(--tc-warn-soft); color: var(--tc-warn); }
+
+/* ---------- 7-day cards ---------- */
+.tc-days {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 10px;
+    margin: 4px 0 20px;
+}
+@media (max-width: 1000px) {
+    .tc-days { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+}
+.tc-day {
+    background: var(--tc-card);
+    border: 1px solid var(--tc-line);
+    border-radius: 12px;
+    padding: 12px 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.tc-day.event { border-color: var(--tc-accent); box-shadow: inset 0 3px 0 var(--tc-accent); }
+.tc-day.closed { background: transparent; border-style: dashed; }
+.tc-day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.tc-day-name { font-weight: 600; font-size: 0.86rem; color: var(--tc-ink); }
+.tc-day-date { font-size: 0.74rem; color: var(--tc-muted); white-space: nowrap; }
+.tc-day-wx {
+    font-size: 0.74rem;
+    color: var(--tc-muted);
+    margin: 6px 0 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tc-day-guests {
+    font-size: 1.65rem;
+    font-weight: 700;
+    color: var(--tc-ink);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+.tc-day.closed .tc-day-guests { font-size: 1rem; font-weight: 600; color: var(--tc-muted); padding: 6px 0 3px; }
+.tc-day-range { font-size: 0.72rem; color: var(--tc-muted); font-variant-numeric: tabular-nums; min-height: 1em; }
+.tc-tag {
+    align-self: flex-start;
+    margin-top: 8px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #F5F5F4;
+    color: var(--tc-ink-2);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tc-tag.accent { background: var(--tc-accent-soft); color: var(--tc-accent); }
+.tc-tag.good { background: var(--tc-good-soft); color: var(--tc-good); }
+.tc-tag.warn { background: var(--tc-warn-soft); color: var(--tc-warn); }
+
+/* ---------- Sidebar ---------- */
+.tc-brand { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; }
+.tc-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: var(--tc-accent);
+    color: #FFFFFF;
+    display: grid;
+    place-items: center;
+    font-family: var(--tc-serif);
+    font-weight: 600;
+    font-size: 1.1rem;
+    flex: none;
+}
+.tc-brand-name { font-family: var(--tc-serif); font-weight: 600; font-size: 1.25rem; color: var(--tc-ink); }
+.tc-section {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tc-muted);
+    margin: 16px 0 6px;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details {
+    background: var(--tc-card);
+    border-radius: 10px;
+}
+
+/* ---------- Sign-in page ---------- */
+.tc-login-head { text-align: center; margin: 2vh 0 20px; }
+.tc-login-head .tc-logo { width: 48px; height: 48px; font-size: 1.5rem; border-radius: 13px; margin: 0 auto 14px; }
+.tc-login-title { font-family: var(--tc-serif); font-size: 2rem; font-weight: 600; color: var(--tc-ink); line-height: 1.15; }
+.tc-login-sub { color: var(--tc-muted); margin-top: 6px; }
+.tc-login-foot { text-align: center; color: var(--tc-muted); font-size: 0.8rem; margin-top: 10px; }
+
+/* ---------- Empty state ---------- */
+.tc-empty {
+    background: var(--tc-card);
+    border: 1px solid var(--tc-line);
+    border-radius: 18px;
+    padding: 30px 32px;
+    box-shadow: var(--tc-shadow);
+    margin-bottom: 16px;
+}
+.tc-empty h2 { margin: 0 0 6px; font-size: 1.6rem; }
+.tc-empty p { color: var(--tc-muted); margin: 0; max-width: 640px; }
+.tc-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 20px; }
+.tc-step { border: 1px solid var(--tc-line); border-radius: 12px; padding: 14px; font-size: 0.88rem; color: var(--tc-ink-2); }
+.tc-step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--tc-accent-soft);
+    color: var(--tc-accent);
+    font-weight: 700;
+    font-size: 0.8rem;
+    display: grid;
+    place-items: center;
+    margin-bottom: 8px;
+}
+
+/* ---------- Footer ---------- */
+.tc-footer {
+    margin-top: 44px;
+    padding-top: 16px;
+    border-top: 1px solid var(--tc-line);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--tc-muted);
+    font-size: 0.78rem;
+}
+
+@media (max-width: 640px) {
+    .tc-title { font-size: 1.6rem; }
+    .tc-kpi-value { font-size: 1.45rem; }
+    .tc-empty { padding: 22px 18px; }
+}

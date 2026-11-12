@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -255,6 +256,58 @@ def verify_location_password(slug: str, password: str) -> bool:
 
 def has_any_location_passwords() -> bool:
     return any(bool(_get_stored_hash(s)) for s, _ in list_locations())
+
+
+# ----------------------------------------------------------------------------
+# Sign-in lockout (kept on disk so opening a new browser tab does not reset it)
+# ----------------------------------------------------------------------------
+MIN_PASSWORD_LENGTH = 8
+MAX_FAILED_LOGINS = 5            # failures allowed before the account is locked
+LOGIN_LOCK_SECONDS = 15 * 60     # how long the lock lasts
+
+
+def _attempts_path():
+    return data_dir() / "login_attempts.json"
+
+
+def _load_attempts():
+    try:
+        return json.loads(_attempts_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_attempts(attempts):
+    path = _attempts_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(attempts), encoding="utf-8")
+
+
+def login_locked_seconds(account, now=None):
+    """Seconds until `account` may try to sign in again (0 = not locked)."""
+    now = time.time() if now is None else now
+    entry = _load_attempts().get(account, {})
+    return max(0, int(entry.get("locked_until", 0) - now))
+
+
+def record_failed_login(account, now=None):
+    """Count a failed sign-in; lock the account after MAX_FAILED_LOGINS failures."""
+    now = time.time() if now is None else now
+    attempts = _load_attempts()
+    entry = attempts.get(account, {})
+    if entry.get("locked_until", 0) <= now and entry.get("fails", 0) >= MAX_FAILED_LOGINS:
+        entry = {}  # previous lock expired: start counting again
+    entry["fails"] = entry.get("fails", 0) + 1
+    if entry["fails"] >= MAX_FAILED_LOGINS:
+        entry["locked_until"] = now + LOGIN_LOCK_SECONDS
+    attempts[account] = entry
+    _save_attempts(attempts)
+
+
+def clear_failed_logins(account):
+    attempts = _load_attempts()
+    if attempts.pop(account, None) is not None:
+        _save_attempts(attempts)
 
 
 def _cloud_creds():
