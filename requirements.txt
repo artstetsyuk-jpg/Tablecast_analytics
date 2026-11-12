@@ -6,3 +6,4 @@ holidays==0.106
 fpdf2==2.8.9
 altair==6.3.0
 threadpoolctl==3.7.0
+xgboost==3.4.1

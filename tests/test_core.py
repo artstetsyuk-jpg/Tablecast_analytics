@@ -106,8 +106,9 @@ def test_batched_forecasts_match_one_at_a_time():
 
 def test_models_run_on_limited_threads():
     """Guards the Streamlit Cloud CPU fix: no 'use every core' settings sneak back in."""
-    model = core.fit_forest(*_tiny_training_set())
-    assert model.rf_model.n_jobs == 1
+    model = core.fit_model(*_tiny_training_set())
+    extra, boost, _linear = model.models
+    assert extra.n_jobs == 1 and boost.get_params()["n_jobs"] == 1
     assert core.N_THREADS >= 1
 
 
