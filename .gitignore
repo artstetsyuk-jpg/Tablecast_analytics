@@ -1,2 +1,8 @@
 .streamlit/secrets.toml
 __pycache__/
+
+# Restaurant data (history, settings, password hashes) - never commit
+data/
+
+# Local tool config
+.claude/
