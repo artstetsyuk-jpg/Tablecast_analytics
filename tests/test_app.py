@@ -16,8 +16,12 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 PASSWORD = "test-password-123"
 
 
-def run_app():
-    return AppTest.from_file(APP, default_timeout=180).run()
+def run_app(language="English"):
+    """Start the app; tests pick English so they can check the English messages."""
+    at = AppTest.from_file(APP, default_timeout=180).run()
+    if language:
+        at = at.selectbox(key="language_selector").set_value(language).run()
+    return at
 
 
 @pytest.fixture
@@ -173,3 +177,12 @@ def test_austria_is_the_default_for_new_accounts_and_the_demo():
 
     demo = run_app().button(key="login_demo_btn").click().run()
     assert demo.selectbox(key="country__guest_demo").value == "AT"
+
+
+def test_german_is_the_default_language():
+    storage.save_settings("someone-else", {"name": "x", "password_hash": storage.hash_password(PASSWORD)})
+    at = run_app(language=None)
+    assert not at.exception
+    assert at.selectbox(key="language_selector").value == "German"
+    labels = [b.label for b in at.button]
+    assert "Anmelden" in labels and "Demo ausprobieren (ohne Konto)" in labels

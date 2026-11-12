@@ -6,7 +6,9 @@ email in mailer.py, text in i18n.py, and the look in ui.py + assets/style.css + 
 import csv
 import hashlib
 import hmac
+import importlib
 import os
+import sys
 from datetime import date, timedelta
 
 import altair as alt
@@ -14,7 +16,31 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-import core
+
+def _reload_changed_local_modules():
+    """After a deploy, Streamlit re-runs this file but may keep OLD copies of our own modules in
+    memory, which caused "cannot import name ..." / AttributeError crashes until a manual reboot.
+    Reload any of our modules whose file changed on disk. Dependencies come first (reports uses core).
+    Skipped under pytest, where tests replace functions (mail, weather) that a reload would undo."""
+    if "pytest" in sys.modules:
+        return
+    seen = sys.__dict__.setdefault("_tablecast_module_mtimes", {})
+    for name in ("i18n", "ui", "mailer", "storage", "core", "reports"):
+        module = sys.modules.get(name)
+        if module is None or not getattr(module, "__file__", None):
+            continue
+        try:
+            mtime = os.path.getmtime(module.__file__)
+        except OSError:
+            continue
+        if seen.get(name) != mtime:
+            importlib.reload(module)
+            seen[name] = mtime
+
+
+_reload_changed_local_modules()
+
+import core  # noqa: E402  (after the reload above, on purpose)
 import mailer
 import reports
 import storage
@@ -26,7 +52,9 @@ from i18n import (
     COUNTRY_NAMES,
     COUNTRY_SUBDIVISIONS,
     CURRENCY_OPTIONS,
+    DAY_SHORT,
     DAY_TRANSLATIONS,
+    LANGUAGE_ORDER,
     MONTH_TRANSLATIONS,
     TRANSLATIONS,
     UI_LABELS,
@@ -166,11 +194,13 @@ if not st.session_state.cloud_pulled:
 
 ui.md(ui.sidebar_brand(BRAND), sidebar=True)
 selected_lang = st.sidebar.selectbox(
-    "Language", ["English", "French", "German"], key="language_selector", label_visibility="collapsed"
+    "Language", LANGUAGE_ORDER, key="language_selector", label_visibility="collapsed",
+    format_func=lambda lang: UI_LABELS[lang]["lang_name"],
 )
 t = TRANSLATIONS[selected_lang]
 L = UI_LABELS[selected_lang]
 DAYS = DAY_TRANSLATIONS[selected_lang]
+DAYS_SHORT = DAY_SHORT[selected_lang]
 MONTHS = MONTH_TRANSLATIONS[selected_lang]
 
 flash = st.session_state.pop("flash", None)
@@ -216,13 +246,13 @@ def log_out():
 
 def handle_sign_in(name, password):
     if not name:
-        st.error("Please enter your restaurant name.")
+        st.error(L["err_need_name"])
         return
     is_admin = name.lower() in ADMIN_NAMES
     account = ADMIN_ACCOUNT if is_admin else storage.slugify(name)
     wait = storage.login_locked_seconds(account)
     if wait:
-        st.error(f"Too many failed attempts. Please try again in {max(1, round(wait / 60))} min.")
+        st.error(L["err_locked"].format(m=max(1, round(wait / 60))))
         return
     if is_admin and app_password and hmac.compare_digest(password.encode("utf-8"), str(app_password).encode("utf-8")):
         storage.clear_failed_logins(account)
@@ -234,7 +264,7 @@ def handle_sign_in(name, password):
         # Only count attempts against real accounts, so random names don't fill the file.
         if is_admin or storage.location_exists(account):
             storage.record_failed_login(account)
-        st.error("Wrong restaurant name or password.")
+        st.error(L["err_wrong_login"])
 
 
 def valid_email(text):
@@ -244,17 +274,17 @@ def valid_email(text):
 def handle_sign_up(name, email, pw1, pw2, code):
     slug = storage.slugify(name) if name else ""
     if signup_code and not hmac.compare_digest(code.encode("utf-8"), str(signup_code).encode("utf-8")):
-        st.error("That invite code is not valid.")
+        st.error(L["err_invite"])
     elif not name or slug in {"default"} | ADMIN_NAMES:
-        st.error("Please enter a valid restaurant name.")
+        st.error(L["err_bad_name"])
     elif storage.location_exists(slug):
-        st.error("An account with this restaurant name already exists. Please sign in.")
+        st.error(L["err_exists"])
     elif not valid_email(email):
-        st.error("Please enter a valid email address. It's used if you ever forget your password.")
+        st.error(L["err_email"])
     elif len(pw1) < storage.MIN_PASSWORD_LENGTH:
-        st.error(f"Your password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
+        st.error(L["err_pw_short"].format(n=storage.MIN_PASSWORD_LENGTH))
     elif pw1 != pw2:
-        st.error("The passwords don't match.")
+        st.error(L["err_pw_match"])
     else:
         storage.save_settings(slug, {
             "name": name,
@@ -268,24 +298,18 @@ def handle_sign_up(name, email, pw1, pw2, code):
             "password_hash": storage.hash_password(pw1),
         })
         storage.sync_to_cloud(slug)
-        st.session_state["flash"] = ("success", f"Welcome, {name}! Your private workspace is ready.")
+        st.session_state["flash"] = ("success", L["welcome"].format(name=name))
         start_session("client", slug)
-
-
-RESET_SENT_NOTE = (
-    "If this restaurant has a recovery email, we've sent a 6-digit code to it. "
-    f"It's valid for {storage.RESET_CODE_MINUTES} minutes."
-)
 
 
 def handle_send_reset_code(name):
     """Email a reset code. The reply is the same whether or not the account exists (no account probing)."""
     if not name:
-        st.error("Please enter your restaurant name.")
+        st.error(L["err_need_name"])
         return
     smtp = mailer.smtp_config(get_secret)
     if smtp is None:
-        st.error("Password reset by email isn't set up on this server yet. Please contact the administrator.")
+        st.error(L["err_no_smtp"])
         return
     slug = storage.slugify(name)
     email = storage.load_settings(slug).get("owner_email", "") if storage.location_exists(slug) else ""
@@ -293,15 +317,15 @@ def handle_send_reset_code(name):
         code = storage.create_reset_code(slug)
         if code:  # None = a code was sent less than a minute ago; don't spam the inbox
             message = mailer.build_email(
-                smtp["from"], [email], "Your TableCast password reset code",
-                f"Hello,\n\nyour code to reset the TableCast password for {storage.load_settings(slug).get('name', name)} is:\n\n"
-                f"    {code}\n\nIt's valid for {storage.RESET_CODE_MINUTES} minutes. "
-                "If you didn't ask for this, you can ignore this email; your password stays the same.\n",
+                smtp["from"], [email], L["mail_subject"],
+                L["mail_body"].format(
+                    name=storage.load_settings(slug).get("name", name), code=code, m=storage.RESET_CODE_MINUTES,
+                ),
             )
             try:
                 mailer.send_email(message, smtp)
             except OSError:
-                st.error("We couldn't send the email right now. Please try again in a few minutes.")
+                st.error(L["err_send"])
                 return
     st.session_state["reset_slug"] = slug
     st.session_state["reset_sent"] = True
@@ -311,45 +335,45 @@ def handle_send_reset_code(name):
 def handle_reset_password(code, pw1, pw2):
     slug = st.session_state.get("reset_slug", "")
     if len(pw1) < storage.MIN_PASSWORD_LENGTH:
-        st.error(f"Your new password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
+        st.error(L["err_new_pw_short"].format(n=storage.MIN_PASSWORD_LENGTH))
     elif pw1 != pw2:
-        st.error("The passwords don't match.")
+        st.error(L["err_pw_match"])
     elif not slug or not storage.use_reset_code(slug, code):
-        st.error("That code is wrong or has expired. You can request a new one.")
+        st.error(L["err_code"])
     else:
         storage.save_location_password(slug, pw1)
         storage.clear_failed_logins(slug)  # a reset also lifts a sign-in lockout
         storage.sync_to_cloud(slug)
         for key in ("reset_slug", "reset_sent", "show_reset"):
             st.session_state.pop(key, None)
-        st.session_state["flash"] = ("success", "Your password has been changed. You can sign in now.")
+        st.session_state["flash"] = ("success", L["pw_changed"])
         st.rerun()
 
 
 def render_password_reset():
     """Step 1: ask for the restaurant and email a code. Step 2: code + new password."""
-    st.markdown("**Reset your password**")
+    st.markdown(f"**{L['reset_title']}**")
     if not st.session_state.get("reset_sent"):
         with st.form("reset_request_form", border=False):
-            reset_name = st.text_input("Restaurant name", key="reset_rest_name", placeholder="Your restaurant's name")
-            send = st.form_submit_button("Email me a reset code", key="reset_send_btn", type="primary", width="stretch")
+            reset_name = st.text_input(L["f_rest_name"], key="reset_rest_name", placeholder=L["ph_rest_name"])
+            send = st.form_submit_button(L["btn_send_code"], key="reset_send_btn", type="primary", width="stretch")
         if send:
             handle_send_reset_code(reset_name.strip())
     else:
-        st.info(RESET_SENT_NOTE)
+        st.info(L["reset_sent"].format(m=storage.RESET_CODE_MINUTES))
         with st.form("reset_form", border=False):
-            reset_code = st.text_input("6-digit code", key="reset_code", max_chars=6)
+            reset_code = st.text_input(L["f_code"], key="reset_code", max_chars=6)
             reset_pw1 = st.text_input(
-                f"New password (at least {storage.MIN_PASSWORD_LENGTH} characters)", type="password", key="reset_pw1"
+                L["f_new_pw"].format(n=storage.MIN_PASSWORD_LENGTH), type="password", key="reset_pw1"
             )
-            reset_pw2 = st.text_input("Confirm new password", type="password", key="reset_pw2")
-            do_reset = st.form_submit_button("Set new password", key="reset_submit_btn", type="primary", width="stretch")
+            reset_pw2 = st.text_input(L["f_new_pw2"], type="password", key="reset_pw2")
+            do_reset = st.form_submit_button(L["btn_set_pw"], key="reset_submit_btn", type="primary", width="stretch")
         if do_reset:
             handle_reset_password(reset_code.strip(), reset_pw1, reset_pw2)
-        if st.button("Didn't get it? Send a new code", key="reset_restart_btn", type="tertiary"):
+        if st.button(L["btn_resend"], key="reset_restart_btn", type="tertiary"):
             st.session_state.pop("reset_sent", None)
             st.rerun()
-    if st.button("← Back to sign in", key="reset_back_btn", type="tertiary"):
+    if st.button(L["btn_back"], key="reset_back_btn", type="tertiary"):
         for key in ("reset_slug", "reset_sent", "show_reset"):
             st.session_state.pop(key, None)
         st.rerun()
@@ -358,42 +382,41 @@ def render_password_reset():
 if need_login and not st.session_state.authed:
     _, mid, _ = st.columns([1, 1.25, 1])
     with mid:
-        ui.md(ui.login_header(BRAND, "Staffing, prep and revenue forecasts for your restaurant."))
-        tab_signin, tab_signup = st.tabs(["Sign in", "Create account"])
+        ui.md(ui.login_header(BRAND, L["login_sub"]))
+        tab_signin, tab_signup = st.tabs([L["tab_signin"], L["tab_signup"]])
         with tab_signin:
             if st.session_state.get("show_reset"):
                 render_password_reset()
             else:
                 with st.form("signin_form", border=False):
-                    login_name = st.text_input("Restaurant name", key="login_rest_name", placeholder="Your restaurant's name")
-                    entered_pw = st.text_input("Password", type="password", key="password_input")
-                    signin = st.form_submit_button("Sign in", key="login_submit_btn", type="primary", width="stretch")
+                    login_name = st.text_input(L["f_rest_name"], key="login_rest_name", placeholder=L["ph_rest_name"])
+                    entered_pw = st.text_input(L["f_password"], type="password", key="password_input")
+                    signin = st.form_submit_button(L["btn_signin"], key="login_submit_btn", type="primary", width="stretch")
                 if signin:
                     handle_sign_in(login_name.strip(), entered_pw)
-                if st.button("Forgot password?", key="forgot_btn", type="tertiary"):
+                if st.button(L["btn_forgot"], key="forgot_btn", type="tertiary"):
                     st.session_state["show_reset"] = True
                     st.rerun()
         with tab_signup:
             with st.form("signup_form", border=False):
-                new_name = st.text_input("Restaurant name", key="signup_rest_name", placeholder="e.g. Harbor Bistro")
+                new_name = st.text_input(L["f_rest_name"], key="signup_rest_name", placeholder=L["ph_new_rest"])
                 new_email = st.text_input(
-                    "Email", key="signup_email", placeholder="you@restaurant.com",
-                    help="Used to reset your password and as the default address for weekly reports.",
+                    L["f_email"], key="signup_email", placeholder="you@restaurant.com", help=L["help_email"],
                 )
                 new_pw1 = st.text_input(
-                    f"Password (at least {storage.MIN_PASSWORD_LENGTH} characters)", type="password", key="signup_pw1"
+                    L["f_pw_min"].format(n=storage.MIN_PASSWORD_LENGTH), type="password", key="signup_pw1"
                 )
-                new_pw2 = st.text_input("Confirm password", type="password", key="signup_pw2")
-                invite = st.text_input("Invite code", key="signup_code") if signup_code else ""
-                create = st.form_submit_button("Create account", key="signup_submit_btn", type="primary", width="stretch")
+                new_pw2 = st.text_input(L["f_pw_confirm"], type="password", key="signup_pw2")
+                invite = st.text_input(L["f_invite"], key="signup_code") if signup_code else ""
+                create = st.form_submit_button(L["btn_create"], key="signup_submit_btn", type="primary", width="stretch")
             if create:
                 handle_sign_up(new_name.strip(), new_email.strip(), new_pw1, new_pw2, invite.strip())
         st.divider()
-        if st.button("Try the demo (no account needed)", key="login_demo_btn", width="stretch"):
+        if st.button(L["btn_demo"], key="login_demo_btn", width="stretch"):
             st.session_state.use_demo = True
             st.session_state.force_login = False
             st.rerun()
-        ui.md('<div class="tc-login-foot">Your data stays private to your workspace.</div>')
+        ui.md(f'<div class="tc-login-foot">{ui.esc(L["login_foot"])}</div>')
     st.stop()
 
 
@@ -410,14 +433,14 @@ if guest_demo:
     saved_names = {}
     slug = "_guest_demo"  # underscore: storage.slugify() can never produce this, so no real location collides
     loc_name = ""
-    ui.md(ui.note("Demo mode. Sign in to use your own workspace."), sidebar=True)
-    if st.sidebar.button("Sign in or create account", key="exit_demo_btn", width="stretch"):
+    ui.md(ui.note(L["demo_mode"]), sidebar=True)
+    if st.sidebar.button(L["btn_exit_demo"], key="exit_demo_btn", width="stretch"):
         log_out()
 elif st.session_state.auth_role == "client" and st.session_state.locked_slug:
     slug = st.session_state.locked_slug
     loc_name = saved_names.get(slug, slug)
     st.sidebar.success(f"🔒 {loc_name}")
-    if st.sidebar.button("Log out", key="logout_btn", width="stretch"):
+    if st.sidebar.button(L["btn_logout"], key="logout_btn", width="stretch"):
         log_out()
 else:
     chosen_slug = st.sidebar.selectbox(
@@ -428,7 +451,7 @@ else:
         t["location_name"], value=saved_names.get(chosen_slug, ""), key=f"loc_name_{chosen_slug or 'new'}"
     ).strip()
     slug = storage.slugify(loc_name) if loc_name else "default"
-    if need_login and st.sidebar.button("Log out", key="admin_logout_btn", width="stretch"):
+    if need_login and st.sidebar.button(L["btn_logout"], key="admin_logout_btn", width="stretch"):
         log_out()
 
 settings = storage.load_settings(slug) if slug in saved_names else {}
@@ -453,12 +476,14 @@ with st.sidebar.expander(L["sec_location"]):
     saved_station = settings.get("station", preset_cities[0])
     city_options = preset_cities + [CUSTOM_CITY]
     default_city_idx = preset_cities.index(saved_station) if saved_station in preset_cities else len(preset_cities)
-    picked_city = st.selectbox("City", city_options, index=default_city_idx, key=f"city_preset_{slug}_{country}")
+    picked_city = st.selectbox(
+        L["f_city"], city_options, index=default_city_idx, key=f"city_preset_{slug}_{country}",
+        format_func=lambda c: L["custom_city"] if c == CUSTOM_CITY else c,
+    )
     if picked_city == CUSTOM_CITY:
         custom_default = saved_station if saved_station not in preset_cities else ""
         station = st.text_input(
-            t["station_label"], value=custom_default,
-            placeholder="e.g. Scottsdale, Gold Coast, 90210...", key=f"station_custom_{slug}",
+            t["station_label"], value=custom_default, placeholder=L["ph_city"], key=f"station_custom_{slug}",
         ).strip() or preset_cities[0]
     else:
         station = picked_city
@@ -473,7 +498,7 @@ with st.sidebar.expander(L["sec_location"]):
             (i for i, code in enumerate(subdiv_map.values()) if code and code == saved_subdiv), 0
         )
         picked_subdiv_label = st.selectbox(
-            "State / territory holidays", subdiv_labels, index=default_sub_idx, key=f"subdiv_{slug}_{country}"
+            L["f_subdiv"], subdiv_labels, index=default_sub_idx, key=f"subdiv_{slug}_{country}"
         )
         subdiv_code = subdiv_map[picked_subdiv_label]
     if not subdiv_code and geo_info.get("admin1"):
@@ -482,17 +507,19 @@ with st.sidebar.expander(L["sec_location"]):
 
     if geo_info["matched"]:
         region_str = f", {geo_info['admin1']}" if geo_info["admin1"] else ""
-        st.caption(f"Weather for {geo_info['name']}{region_str} · holidays: {holiday_country}")
+        st.caption(L["weather_for"].format(place=f"{geo_info['name']}{region_str}", code=holiday_country))
     else:
-        st.caption(f"City not found, using {COUNTRY_NAMES.get(country, country)}'s main city for weather.")
+        st.caption(L["city_not_found"].format(country=COUNTRY_NAMES.get(country, country)))
 
     unit_col1, unit_col2 = st.columns(2)
     default_curr = settings.get("currency") or COUNTRY_CURRENCIES.get(country, "€")
     curr_idx = CURRENCY_OPTIONS.index(default_curr) if default_curr in CURRENCY_OPTIONS else 0
-    currency = unit_col1.selectbox("Currency", CURRENCY_OPTIONS, index=curr_idx, key=f"currency_select_{slug}_{country}")
+    currency = unit_col1.selectbox(
+        L["f_currency"], CURRENCY_OPTIONS, index=curr_idx, key=f"currency_select_{slug}_{country}"
+    )
     default_temp_unit = settings.get("temp_unit") or ("F" if country == "US" else "C")
     temp_unit_label = unit_col2.radio(
-        "Units", ["°C / mm", "°F / in"], index=1 if default_temp_unit == "F" else 0,
+        L["f_units"], ["°C / mm", "°F / in"], index=1 if default_temp_unit == "F" else 0,
         key=f"temp_unit_{slug}_{country}",
     )
     temp_unit = "F" if "°F" in temp_unit_label else "C"
@@ -501,15 +528,15 @@ with st.sidebar.expander(L["sec_location"]):
 with st.sidebar.expander(L["sec_service"]):
     lunch_share = st.slider(t["lunch_share"], 0, 100, int(settings.get("lunch_share", 40)), key=f"lunch_{slug}")
     weekend_lunch_share = st.slider(
-        t.get("weekend_lunch_share", "Weekend lunch share (%)"),
+        L["f_wknd_lunch"],
         0, 100, int(settings.get("weekend_lunch_share", lunch_share)), key=f"wknd_lunch_{slug}",
     )
     avg_spend = st.number_input(
-        f"Lunch spend per guest ({currency})",
+        L["f_lunch_spend"].format(c=currency),
         min_value=0.0, value=float(settings.get("avg_spend", 25.0)), step=1.0, key=f"spend_{slug}",
     )
     dinner_spend = st.number_input(
-        f"Dinner spend per guest ({currency})",
+        L["f_dinner_spend"].format(c=currency),
         min_value=0.0, value=float(settings.get("dinner_spend", max(avg_spend, 32.0))), step=1.0,
         key=f"dinner_spend_{slug}",
     )
@@ -530,17 +557,17 @@ with st.sidebar.expander(L["sec_events"], expanded=bool(saved_events)):
             st.number_input(t["extra_guests"], min_value=1, max_value=500, value=25, key="extra_guests_input")
         )
         ev_col1, ev_col2 = st.columns(2)
-        if not guest_demo and ev_col1.button("Save event", key="save_event_btn", width="stretch"):
+        if not guest_demo and ev_col1.button(L["btn_save_event"], key="save_event_btn", width="stretch"):
             saved_events[event_date.isoformat()] = event_extra_visitors
             storage.save_events(slug, saved_events)
             storage.sync_to_cloud(slug)
             st.rerun()
-        if saved_events and ev_col2.button("Clear all", key="clear_events_btn", width="stretch"):
+        if saved_events and ev_col2.button(L["btn_clear_events"], key="clear_events_btn", width="stretch"):
             saved_events = storage.save_events(slug, {})
             storage.sync_to_cloud(slug)
             st.rerun()
     if saved_events:
-        st.caption("Saved: " + ", ".join(f"{k} (+{v})" for k, v in sorted(saved_events.items())))
+        st.caption(L["saved_events"].format(list=", ".join(f"{k} (+{v})" for k, v in sorted(saved_events.items()))))
 
 # --- Account & email ---
 new_loc_password = ""
@@ -549,18 +576,17 @@ owner_email = settings.get("owner_email", "")
 if not guest_demo:
     with st.sidebar.expander(L["sec_account"], expanded=bool(settings) and not owner_email):
         owner_email = st.text_input(
-            "Recovery email", value=owner_email, key=f"owner_email_{slug}",
-            help="Where a code is sent if you forget your password. Not shown to anyone.",
+            L["f_recovery"], value=owner_email, key=f"owner_email_{slug}", help=L["help_recovery"],
         ).strip()
         if settings and not owner_email:
-            st.caption("Add a recovery email so you can reset your password if you forget it.")
+            st.caption(L["add_recovery"])
         recipients_text = st.text_input(
             t["email_recipients"], value=settings.get("recipients", ""), key=f"recipients_{slug}"
         )
-        pw_label = "Change password (optional)" if settings.get("password_hash") else "Set a password"
+        pw_label = L["pw_change"] if settings.get("password_hash") else L["pw_set"]
         new_loc_password = st.text_input(
             pw_label, type="password", key=f"loc_pw_{slug}",
-            help=f"At least {storage.MIN_PASSWORD_LENGTH} characters.",
+            help=L["help_pw"].format(n=storage.MIN_PASSWORD_LENGTH),
         ).strip()
 
 
@@ -603,11 +629,11 @@ if uploaded_file is not None:
             storage.save_visits(slug, upload_clean)
             storage.sync_to_cloud(slug)
             st.session_state["autosaved_upload"] = upload_id
-            st.toast(f"Saved to {loc_name}: {len(visits)} days in total, {new_days} new.", icon="✅")
+            st.toast(L["autosaved"].format(name=loc_name, total=len(visits), new=new_days), icon="✅")
     else:
         st.toast(t["success_loaded"].format(n=len(visits)), icon="✅")
         if not guest_demo:
-            st.sidebar.caption("New location: click the Save button below to keep this data.")
+            st.sidebar.caption(L["new_loc_hint"])
 elif saved_visits is not None:
     st.session_state.use_demo = False
     visits = saved_visits
@@ -621,9 +647,9 @@ if not guest_demo:
         if not loc_name:
             st.sidebar.error(t["err_location_name"])
         elif new_loc_password and len(new_loc_password) < storage.MIN_PASSWORD_LENGTH:
-            st.sidebar.error(f"The password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
+            st.sidebar.error(L["err_pw_short_side"].format(n=storage.MIN_PASSWORD_LENGTH))
         elif owner_email and not valid_email(owner_email):
-            st.sidebar.error("The recovery email doesn't look like a valid address.")
+            st.sidebar.error(L["err_recovery"])
         else:
             storage.save_visits(slug, visits)
             storage.save_settings(slug, {
@@ -759,7 +785,7 @@ with tab_plan:
         tag_key, tag_kind = day_driver(d, temp_val, rain_val, holiday_set, row["on_event"], row["is_closed"])
         has_range = not row["is_closed"] and row["low"] is not None
         day_rows.append({
-            "name": DAYS[d.dayofweek][:3],
+            "name": DAYS_SHORT[d.dayofweek],
             "date": f"{d.day} {MONTHS[d.month - 1]}",
             "weather": f"{weather_icon(temp_val, rain_val)} {fmt_temp(temp_val, temp_unit)} · {fmt_rain(rain_val, temp_unit)}",
             "guests": t["closed"] if row["is_closed"] else f"{row['expected']}",
@@ -771,7 +797,7 @@ with tab_plan:
 
     chart_df = pd.DataFrame([
         {
-            "day": f"{DAYS[r['date'].dayofweek][:3]} {r['date'].day}",
+            "day": f"{DAYS_SHORT[r['date'].dayofweek]} {r['date'].day}",
             "expected": 0 if r["is_closed"] else r["expected"],
             "low": None if r["is_closed"] else r["low"],
             "high": None if r["is_closed"] else r["high"],
@@ -785,7 +811,7 @@ with tab_plan:
         y=alt.Y("expected:Q", title=None),
         color=alt.condition(alt.datum.kind == "event", alt.value(ui.ACCENT_DARK), alt.value(ui.ACCENT)),
         tooltip=[alt.Tooltip("day:N", title=" "), alt.Tooltip("expected:Q", title=ui.plain(t["col_traffic"])),
-                 alt.Tooltip("low:Q", title="Low"), alt.Tooltip("high:Q", title="High")],
+                 alt.Tooltip("low:Q", title=L["tt_low"]), alt.Tooltip("high:Q", title=L["tt_high"])],
     )
     layers = [bars]
     if bundle["intervals"] is not None:
@@ -825,7 +851,7 @@ with tab_plan:
 
     with st.expander(L["weather_assumptions"]):
         st.checkbox(
-            t.get("manual_weather_override", "Override the weather forecast (what-if)"),
+            L["override_weather"],
             value=not live_weather_ok,
             key="manual_weather_checkbox",
         )
@@ -833,9 +859,9 @@ with tab_plan:
             default_temp, _ = core.default_weather(history)
             col_b1, col_b2 = st.columns(2)
             if temp_unit == "F":
-                temp_f_val = col_b1.slider("Avg week temp (°F)", 14.0, 104.0, round(c_to_f(default_temp), 1), key="temp_slider_f")
+                temp_f_val = col_b1.slider(L["f_temp_f"], 14.0, 104.0, round(c_to_f(default_temp), 1), key="temp_slider_f")
                 st.session_state["temp_slider_input"] = f_to_c(temp_f_val)
-                rain_in_val = col_b2.slider("Avg week rain (in)", 0.0, 2.0, 0.0, step=0.05, key="rain_slider_in")
+                rain_in_val = col_b2.slider(L["f_rain_in"], 0.0, 2.0, 0.0, step=0.05, key="rain_slider_in")
                 st.session_state["rain_slider_input"] = rain_in_val * 25.4
             else:
                 col_b1.slider(t["avg_temp"], -10.0, 40.0, default_temp, key="temp_slider_input")
@@ -845,37 +871,38 @@ with tab_plan:
 # Kitchen prep (custom ingredients + presets)
 # ----------------------------------------------------------------------------
 with tab_prep:
-    st.caption("List what you prep per guest; TableCast turns the forecast into daily quantities.")
+    st.caption(L["prep_caption"])
 
+    # Preset labels and item names follow the selected language (stored data keeps whatever was saved).
     PRESET_TEMPLATES = {
-        "Burger / bistro": [
-            {"Item": "Burger Buns / Bread Rolls", "Per Guest": 0.45, "Unit": "pcs"},
-            {"Item": "Beef / Meat Prep", "Per Guest": 0.12, "Unit": "kg"},
-            {"Item": "Fries / Potatoes", "Per Guest": 0.15, "Unit": "kg"},
+        L["preset_bistro"]: [
+            {"Item": L["it_buns"], "Per Guest": 0.45, "Unit": "pcs"},
+            {"Item": L["it_meat"], "Per Guest": 0.12, "Unit": "kg"},
+            {"Item": L["it_fries"], "Per Guest": 0.15, "Unit": "kg"},
         ],
-        "Bakery / café": [
-            {"Item": "Croissants / Pastries", "Per Guest": 0.85, "Unit": "pcs"},
-            {"Item": "Espresso Beans", "Per Guest": 0.018, "Unit": "kg"},
-            {"Item": "Milk / Oat Milk", "Per Guest": 0.12, "Unit": "L"},
+        L["preset_bakery"]: [
+            {"Item": L["it_pastry"], "Per Guest": 0.85, "Unit": "pcs"},
+            {"Item": L["it_beans"], "Per Guest": 0.018, "Unit": "kg"},
+            {"Item": L["it_milk"], "Per Guest": 0.12, "Unit": "L"},
         ],
-        "Gym / shake bar": [
-            {"Item": "Creatine", "Per Guest": 5.0, "Unit": "g"},
-            {"Item": "Whey Protein", "Per Guest": 30.0, "Unit": "g"},
-            {"Item": "Bananas / Fruit", "Per Guest": 0.5, "Unit": "pcs"},
+        L["preset_gym"]: [
+            {"Item": L["it_creatine"], "Per Guest": 5.0, "Unit": "g"},
+            {"Item": L["it_whey"], "Per Guest": 30.0, "Unit": "g"},
+            {"Item": L["it_fruit"], "Per Guest": 0.5, "Unit": "pcs"},
         ],
     }
     UNITS = ["pcs", "kg", "g", "L", "ml", "lb", "oz", "portions"]
 
     state_key = f"prep_items_list_{slug}"
     if state_key not in st.session_state:
-        st.session_state[state_key] = settings.get("prep_items") or PRESET_TEMPLATES["Burger / bistro"]
+        st.session_state[state_key] = settings.get("prep_items") or PRESET_TEMPLATES[L["preset_bistro"]]
 
-    with st.expander("Add an ingredient or load a preset"):
+    with st.expander(L["prep_add"]):
         add_c1, add_c2, add_c3, add_c4 = st.columns([2.2, 1.2, 1, 1.2], vertical_alignment="bottom")
-        new_item_name = add_c1.text_input("Ingredient", placeholder="e.g. Semmeln, chicken...", key=f"new_ing_name_{slug}")
-        new_item_rate = add_c2.number_input("Per guest", min_value=0.01, value=0.50, step=0.05, key=f"new_ing_rate_{slug}")
-        new_item_unit = add_c3.selectbox("Unit", UNITS, key=f"new_ing_unit_{slug}")
-        if add_c4.button("Add", key=f"add_ing_btn_{slug}", type="primary", width="stretch"):
+        new_item_name = add_c1.text_input(L["f_ingredient"], placeholder=L["ph_ingredient"], key=f"new_ing_name_{slug}")
+        new_item_rate = add_c2.number_input(L["f_per_guest"], min_value=0.01, value=0.50, step=0.05, key=f"new_ing_rate_{slug}")
+        new_item_unit = add_c3.selectbox(L["f_unit"], UNITS, key=f"new_ing_unit_{slug}")
+        if add_c4.button(L["btn_add"], key=f"add_ing_btn_{slug}", type="primary", width="stretch"):
             if new_item_name.strip():
                 st.session_state[state_key].append(
                     {"Item": new_item_name.strip(), "Per Guest": float(new_item_rate), "Unit": new_item_unit}
@@ -887,15 +914,14 @@ with tab_prep:
             if preset_cols[idx_p].button(preset_label, key=f"pre_{idx_p}_{slug}", width="stretch"):
                 st.session_state[state_key] = [dict(r) for r in preset_rows]
                 st.rerun()
-        if preset_cols[3].button("Clear list", key=f"clear_ing_{slug}", width="stretch"):
+        if preset_cols[3].button(L["btn_clear_list"], key=f"clear_ing_{slug}", width="stretch"):
             st.session_state[state_key] = []
             st.rerun()
 
     col_p1, col_p2 = st.columns([3, 1])
     with col_p2:
         safety_buffer = st.slider(
-            "Safety buffer (%)", 0, 30, int(settings.get("prep_buffer", 10)),
-            help="Adds a cushion so you don't run out during an unexpected rush.",
+            L["f_buffer"], 0, 30, int(settings.get("prep_buffer", 10)), help=L["help_buffer"],
             key=f"prep_buf_{slug}",
         )
     with col_p1:
@@ -904,9 +930,9 @@ with tab_prep:
             num_rows="dynamic",
             width="stretch",
             column_config={
-                "Item": st.column_config.TextColumn("Ingredient", required=True),
-                "Per Guest": st.column_config.NumberColumn("Per guest", min_value=0.0, format="%.2f"),
-                "Unit": st.column_config.SelectboxColumn("Unit", options=UNITS),
+                "Item": st.column_config.TextColumn(L["f_ingredient"], required=True),
+                "Per Guest": st.column_config.NumberColumn(L["f_per_guest"], min_value=0.0, format="%.2f"),
+                "Unit": st.column_config.SelectboxColumn(L["f_unit"], options=UNITS),
             },
             key=f"prep_editor_{slug}",
         )
@@ -921,8 +947,8 @@ with tab_prep:
         for row in plan:
             d = row["date"]
             day_entry = {
-                "Date": f"{DAYS[d.dayofweek][:3]} {d.day} {MONTHS[d.month - 1]}",
-                "Guests": 0 if row["is_closed"] else row["expected"],
+                L["col_date"]: f"{DAYS_SHORT[d.dayofweek]} {d.day} {MONTHS[d.month - 1]}",
+                L["col_guests"]: 0 if row["is_closed"] else row["expected"],
             }
             for item_row in valid_items:
                 item_name = str(item_row["Item"]).strip()
@@ -938,7 +964,7 @@ with tab_prep:
             prep_schedule.append(day_entry)
         st.dataframe(pd.DataFrame(prep_schedule), hide_index=True, width="stretch")
     else:
-        st.info("Add at least one ingredient above to get your 7-day prep schedule.")
+        st.info(L["prep_empty"])
 
 # ----------------------------------------------------------------------------
 # Accuracy: backtest chart & day-of-week pattern
@@ -1021,7 +1047,7 @@ with tab_track:
             color=[ui.INK, ui.ACCENT],
         )
     if guest_demo:
-        st.caption("Sign in to save forecasts and build your track record.")
+        st.caption(L["guest_track"])
     elif st.button(ui.plain(t["save_forecast_btn"]), key="save_forecast_button", type="primary"):
         saved_days = storage.log_forecast(slug, date.today(), plan)
         storage.sync_to_cloud(slug)
@@ -1050,7 +1076,7 @@ with tab_export:
         key="download_pdf_btn", width="stretch", type="primary", icon=":material/picture_as_pdf:",
     )
     d_col3.download_button(
-        label="Calendar (.ics)",
+        label=L["dl_ics"],
         data=ics_bytes,
         file_name=f"{slug.strip('_')}_7day_schedule.ics", mime="text/calendar",
         key="download_ics_btn", width="stretch", icon=":material/calendar_month:",
@@ -1059,7 +1085,7 @@ with tab_export:
     st.divider()
     st.subheader(ui.plain(t["email_header"]))
     if guest_demo:
-        st.caption("Sign in to email reports to your team.")
+        st.caption(L["guest_email"])
     else:
         st.caption(f"{t['email_recipients']}: {recipients_text or '-'}")
         # Guests never reach this button, so they can't send mail through the app's SMTP account.
