@@ -157,3 +157,19 @@ def test_upload_is_saved_automatically_for_signed_in_owner(account, monkeypatch)
     assert saved["visit_date"].max() == recent["visit_date"].max()       # new days are on disk
     assert saved["visit_date"].min() == old["visit_date"].min()          # old history kept
     assert not saved["visit_date"].duplicated().any()
+
+
+def test_austria_is_the_default_for_new_accounts_and_the_demo():
+    storage.save_settings("someone-else", {"name": "x", "password_hash": storage.hash_password(PASSWORD)})
+    at = run_app()
+    at.text_input(key="signup_rest_name").input("Wiener Cafe")
+    at.text_input(key="signup_email").input("owner@wienercafe.at")
+    at.text_input(key="signup_pw1").input(PASSWORD)
+    at.text_input(key="signup_pw2").input(PASSWORD)
+    at = at.button(key="signup_submit_btn").click().run()
+    assert not at.exception
+    saved = storage.load_settings("wiener-cafe")
+    assert (saved["country"], saved["station"], saved["currency"], saved["temp_unit"]) == ("AT", "Vienna", "€", "C")
+
+    demo = run_app().button(key="login_demo_btn").click().run()
+    assert demo.selectbox(key="country__guest_demo").value == "AT"

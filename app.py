@@ -37,6 +37,8 @@ MAKER = "TableCast Labs"
 CUSTOM_CITY = "✍️ Type any city or ZIP code..."
 ADMIN_NAMES = {"admin", "administrator"}
 ADMIN_ACCOUNT = "__admin__"  # lockout key for the admin sign-in
+DEFAULT_COUNTRY = "AT"       # preselected country for new workspaces and the demo
+DEFAULT_CITY = "Vienna"
 
 st.set_page_config(
     page_title="TableCast · Restaurant Forecasts",
@@ -257,10 +259,10 @@ def handle_sign_up(name, email, pw1, pw2, code):
         storage.save_settings(slug, {
             "name": name,
             "language": selected_lang,
-            "country": "US",
-            "station": "New York",
-            "currency": "$",
-            "temp_unit": "F",
+            "country": DEFAULT_COUNTRY,
+            "station": DEFAULT_CITY,
+            "currency": COUNTRY_CURRENCIES.get(DEFAULT_COUNTRY, "€"),
+            "temp_unit": "C",
             "owner_email": email,
             "recipients": email,
             "password_hash": storage.hash_password(pw1),
@@ -439,14 +441,15 @@ with st.sidebar.expander(L["sec_data"], expanded=saved_visits is None):
 
 # --- Location & calendar ---
 with st.sidebar.expander(L["sec_location"]):
-    country_codes = list(COUNTRY_NAMES)
+    # Default country first in the list; a workspace's saved country still wins.
+    country_codes = [DEFAULT_COUNTRY] + [c for c in COUNTRY_NAMES if c != DEFAULT_COUNTRY]
     default_country_idx = country_codes.index(settings["country"]) if settings.get("country") in country_codes else 0
     country = st.selectbox(
         ui.plain(t["country_label"]), country_codes, index=default_country_idx,
         format_func=lambda c: f"{COUNTRY_NAMES[c]} ({c})", key=f"country_{slug}",
     )
 
-    preset_cities = COUNTRY_CITIES.get(country, ["Vienna"])
+    preset_cities = COUNTRY_CITIES.get(country, [DEFAULT_CITY])
     saved_station = settings.get("station", preset_cities[0])
     city_options = preset_cities + [CUSTOM_CITY]
     default_city_idx = preset_cities.index(saved_station) if saved_station in preset_cities else len(preset_cities)
@@ -484,7 +487,7 @@ with st.sidebar.expander(L["sec_location"]):
         st.caption(f"City not found, using {COUNTRY_NAMES.get(country, country)}'s main city for weather.")
 
     unit_col1, unit_col2 = st.columns(2)
-    default_curr = settings.get("currency") or COUNTRY_CURRENCIES.get(country, "$")
+    default_curr = settings.get("currency") or COUNTRY_CURRENCIES.get(country, "€")
     curr_idx = CURRENCY_OPTIONS.index(default_curr) if default_curr in CURRENCY_OPTIONS else 0
     currency = unit_col1.selectbox("Currency", CURRENCY_OPTIONS, index=curr_idx, key=f"currency_select_{slug}_{country}")
     default_temp_unit = settings.get("temp_unit") or ("F" if country == "US" else "C")
