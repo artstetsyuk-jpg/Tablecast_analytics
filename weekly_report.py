@@ -33,9 +33,12 @@ def build_location_report(slug, settings, today):
         )
     loc_country = settings.get("country", "AT")
     loc_subdiv = settings.get("subdiv", "")
+    loc_station = settings.get("station", "")
+    # Same "COUNTRY-SUBDIV" holiday code the app passes to train_bundle.
+    holiday_country = f"{loc_country}-{loc_subdiv}" if loc_subdiv else loc_country
     currency = settings.get("currency") or COUNTRY_CURRENCIES.get(loc_country, "€")
     saved_events = storage.load_events(slug)
-    bundle = core.train_bundle(visits, station, loc_country, events=events, subdiv=loc_subdiv)
+    bundle = core.train_bundle(visits, loc_station, holiday_country, events=saved_events)
     if bundle is None:
         raise ValueError("not enough usable history to train")
     history = bundle["history"]

@@ -432,11 +432,15 @@ if flash:
 saved_locations = storage.list_locations()
 saved_names = dict(saved_locations)
 app_password = get_secret("APP_PASSWORD")
-need_login = (
+login_required = (
     bool(app_password)
     or storage.has_any_location_passwords()
     or st.session_state.get("force_login", False)
-) and not st.session_state.get("use_demo", False)
+)
+need_login = login_required and not st.session_state.get("use_demo", False)
+# A visitor who skipped sign-in via the demo button. They must never see or change saved
+# locations, so the sidebar and every save/email action is locked down for them below.
+guest_demo = login_required and not st.session_state.authed
 
 if need_login and not st.session_state.authed:
     st.subheader("📊 TableCast Analytics — Portal")
@@ -546,15 +550,30 @@ pending_location = st.session_state.pop("pending_location", None)
 if pending_location in saved_names:
     st.session_state["saved_location"] = pending_location
 
+def log_out():
+    st.session_state.authed = False
+    st.session_state.auth_role = "admin"
+    st.session_state.locked_slug = None
+    st.session_state.use_demo = False
+    st.rerun()
+
+
 st.sidebar.header(t["location_header"])
-if st.session_state.auth_role == "client" and st.session_state.locked_slug:
+if guest_demo:
+    # Demo visitors get no access to saved locations: nothing is loaded from or written to disk.
+    saved_names = {}
+    slug = "_guest_demo"  # underscore: storage.slugify() can never produce this, so no real location collides
+    loc_name = ""
+    st.sidebar.info("👀 Demo mode — sign in to use your own workspace.")
+    if st.sidebar.button("🔑 Sign in / Register", key="exit_demo_btn"):
+        log_out()
+elif st.session_state.auth_role == "client" and st.session_state.locked_slug:
     chosen_slug = st.session_state.locked_slug
     loc_name = saved_names.get(chosen_slug, chosen_slug)
     slug = chosen_slug
     st.sidebar.success(f"🔒 {loc_name}")
     if st.sidebar.button("🚪 Log out", key="logout_btn"):
-        st.session_state.authed = False
-        st.rerun()
+        log_out()
 else:
     chosen_slug = st.sidebar.selectbox(
         t["location_saved"], [""] + list(saved_names),
@@ -565,13 +584,14 @@ else:
     ).strip()
     slug = storage.slugify(loc_name) if loc_name else "default"
     if need_login and st.sidebar.button("🚪 Log out", key="admin_logout_btn"):
-        st.session_state.authed = False
-        st.rerun()
+        log_out()
 
 settings = storage.load_settings(slug) if slug in saved_names else {}
 
-pw_status = "🔑 Change Password (optional)" if settings.get("password_hash") else "🔑 Set Account Password"
-new_loc_password = st.sidebar.text_input(pw_status, type="password", key=f"loc_pw_{slug}").strip()
+new_loc_password = ""
+if not guest_demo:
+    pw_status = "🔑 Change Password (optional)" if settings.get("password_hash") else "🔑 Set Account Password"
+    new_loc_password = st.sidebar.text_input(pw_status, type="password", key=f"loc_pw_{slug}").strip()
 st.sidebar.header(t["upload_header"])
 uploaded_file = st.sidebar.file_uploader(t["upload_prompt"], type=["csv"], key="csv_file_uploader")
 st.sidebar.markdown(t["req_format"])
@@ -682,14 +702,14 @@ dinner_spend = st.sidebar.number_input(
 guests_per_server = st.sidebar.number_input(
     t["guests_per_server"], min_value=1, value=int(settings.get("guests_per_server", 15)), step=1, key=f"gps_{slug}"
 )
-recipients_text = st.sidebar.text_input(
+recipients_text = "" if guest_demo else st.sidebar.text_input(
     t["email_recipients"], value=settings.get("recipients", ""), key=f"recipients_{slug}"
 )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader(t["events_header"])
 st.sidebar.write(t["events_desc"])
-saved_events = storage.load_events(slug)
+saved_events = {} if guest_demo else storage.load_events(slug)
 has_custom_event = st.sidebar.checkbox(t["checkbox_event"], key="private_event_checkbox")
 event_date = None
 event_extra_visitors = 0
@@ -699,7 +719,7 @@ if has_custom_event:
         st.sidebar.number_input(t["extra_guests"], min_value=1, max_value=500, value=25, key="extra_guests_input")
     )
     ev_col1, ev_col2 = st.sidebar.columns(2)
-    if ev_col1.button("➕ Save Event", key="save_event_btn"):
+    if not guest_demo and ev_col1.button("➕ Save Event", key="save_event_btn"):
         saved_events[event_date.isoformat()] = event_extra_visitors
         storage.save_events(slug, saved_events)
         storage.sync_to_cloud(slug)
@@ -727,7 +747,8 @@ if uploaded_file is None and saved_visits is None and not st.session_state.use_d
     st.stop()
 
 if uploaded_file is not None:
-    st.session_state.use_demo = False
+    if not guest_demo:  # guests can try their own CSV, but stay in (unsaved) demo mode
+        st.session_state.use_demo = False
     try:
         raw_df = cached_read_csv(uploaded_file.getvalue())
     except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, csv.Error):
@@ -758,7 +779,7 @@ else:
     )
 
 st.sidebar.markdown("---")
-if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_container_width=True):
+if not guest_demo and st.sidebar.button(t["save_location_btn"], key="save_location_button", use_container_width=True):
     if not loc_name:
         st.sidebar.error(t["err_location_name"])
     else:
@@ -767,13 +788,19 @@ if st.sidebar.button(t["save_location_btn"], key="save_location_button", use_con
             "name": loc_name,
             "language": selected_lang,
             "country": country,
-            "subdiv": subdiv,        # <-- ADD THIS LINE (use subdiv_code if yours is named subdiv_code)
-            "currency": currency,    # <-- ADD THIS LINE
+            "subdiv": subdiv_code,
+            "currency": currency,
+            "temp_unit": temp_unit,
             "station": station,
             "lunch_share": lunch_share,
+            "weekend_lunch_share": weekend_lunch_share,
             "avg_spend": avg_spend,
+            "dinner_spend": dinner_spend,
             "guests_per_server": int(guests_per_server),
             "recipients": recipients_text,
+            # The prep tab is drawn further down, so read its current values from session state.
+            "prep_items": st.session_state.get(f"prep_items_list_{slug}", settings.get("prep_items")),
+            "prep_buffer": int(st.session_state.get(f"prep_buf_{slug}", settings.get("prep_buffer", 10))),
             "password_hash": storage.hash_password(new_loc_password) if new_loc_password else settings.get("password_hash", ""),
         })
         storage.sync_to_cloud(slug)
@@ -1160,7 +1187,7 @@ with tab_track:
                 columns={"actual": t["legend_actual"], "predicted": t["legend_pred"]}
             )
         )
-    if st.button(t["save_forecast_btn"], key="save_forecast_button", type="primary"):
+    if not guest_demo and st.button(t["save_forecast_btn"], key="save_forecast_button", type="primary"):
         saved_days = storage.log_forecast(slug, date.today(), plan)
         storage.sync_to_cloud(slug)
         st.success(t["forecast_saved"].format(n=saved_days))
@@ -1209,7 +1236,8 @@ with tab_export:
     st.markdown("---")
     st.subheader(t["email_header"])
     st.caption(f"{t['email_recipients']}: {recipients_text or '-'}")
-    if st.button(t["email_send_btn"], key="send_email_button", type="primary"):
+    # Guests must not be able to send mail through the app's SMTP account.
+    if not guest_demo and st.button(t["email_send_btn"], key="send_email_button", type="primary"):
         smtp = mailer.smtp_config(get_secret)
         recipients = mailer.parse_recipients(recipients_text)
         if smtp is None:
