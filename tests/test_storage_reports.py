@@ -36,6 +36,30 @@ def test_login_lockout_after_repeated_failures():
     assert storage.login_locked_seconds("other-place", now=now) == 0
 
 
+def test_reset_code_is_single_use_and_expires():
+    now = 2_000_000.0
+    code = storage.create_reset_code("bistro", now=now)
+    assert code and len(code) == 6 and code.isdigit()
+    assert not storage.use_reset_code("bistro", "999999" if code != "999999" else "111111", now=now)
+    assert storage.use_reset_code("bistro", code, now=now)
+    assert not storage.use_reset_code("bistro", code, now=now)                 # used up
+
+    later = now + storage.RESET_RESEND_SECONDS + 1
+    code = storage.create_reset_code("bistro", now=later)
+    expired = later + storage.RESET_CODE_MINUTES * 60 + 1
+    assert not storage.use_reset_code("bistro", code, now=expired)            # too late
+
+
+def test_reset_code_limits_guesses_and_resends():
+    now = 3_000_000.0
+    code = storage.create_reset_code("bistro", now=now)
+    assert storage.create_reset_code("bistro", now=now + 5) is None          # no re-send within a minute
+    wrong = "000000" if code != "000000" else "111111"
+    for _ in range(storage.RESET_MAX_ATTEMPTS):
+        assert not storage.use_reset_code("bistro", wrong, now=now)
+    assert not storage.use_reset_code("bistro", code, now=now)                # locked after too many guesses
+
+
 def test_save_visits_merges_and_new_values_win(visits):
     storage.save_visits("bistro", visits.head(80))
     update = visits.iloc[70:].copy()

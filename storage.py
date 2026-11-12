@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import secrets
 import time
 import unicodedata
 import urllib.parse
@@ -308,6 +309,65 @@ def clear_failed_logins(account):
     attempts = _load_attempts()
     if attempts.pop(account, None) is not None:
         _save_attempts(attempts)
+
+
+# ----------------------------------------------------------------------------
+# Password reset codes: 6 digits, emailed to the account's recovery address,
+# stored only as a hash, single use, short-lived, limited guesses.
+# ----------------------------------------------------------------------------
+RESET_CODE_MINUTES = 15
+RESET_MAX_ATTEMPTS = 5
+RESET_RESEND_SECONDS = 60
+
+
+def _resets_path():
+    return data_dir() / "password_resets.json"
+
+
+def _load_resets():
+    try:
+        return json.loads(_resets_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_resets(resets):
+    path = _resets_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(resets), encoding="utf-8")
+
+
+def _hash_code(slug, code):
+    return hashlib.sha256(f"{slug}:{code}".encode("utf-8")).hexdigest()
+
+
+def create_reset_code(slug, now=None):
+    """New code for `slug`, replacing any older one. Returns None if one was sent < RESET_RESEND_SECONDS ago."""
+    now = time.time() if now is None else now
+    resets = _load_resets()
+    if now - resets.get(slug, {}).get("sent_at", -1e12) < RESET_RESEND_SECONDS:
+        return None
+    code = f"{secrets.randbelow(10**6):06d}"
+    resets[slug] = {"hash": _hash_code(slug, code), "expires": now + RESET_CODE_MINUTES * 60,
+                    "attempts": 0, "sent_at": now}
+    _save_resets(resets)
+    return code
+
+
+def use_reset_code(slug, code, now=None):
+    """True (and the code is used up) if `code` is the current, unexpired code for `slug`."""
+    now = time.time() if now is None else now
+    resets = _load_resets()
+    entry = resets.get(slug)
+    if not entry or now > entry["expires"] or entry["attempts"] >= RESET_MAX_ATTEMPTS:
+        return False
+    if hmac.compare_digest(entry["hash"], _hash_code(slug, str(code).strip())):
+        resets.pop(slug)
+        _save_resets(resets)
+        return True
+    entry["attempts"] += 1
+    _save_resets(resets)
+    return False
 
 
 def _cloud_creds():

@@ -4,6 +4,7 @@ Forecasting logic lives in core.py, files/history in storage.py, PDF + calendar 
 email in mailer.py, text in i18n.py, and the look in ui.py + assets/style.css + .streamlit/config.toml.
 """
 import csv
+import hashlib
 import hmac
 import os
 from datetime import date, timedelta
@@ -234,7 +235,11 @@ def handle_sign_in(name, password):
         st.error("Wrong restaurant name or password.")
 
 
-def handle_sign_up(name, pw1, pw2, code):
+def valid_email(text):
+    return bool(text) and mailer.parse_recipients(text) == [text]
+
+
+def handle_sign_up(name, email, pw1, pw2, code):
     slug = storage.slugify(name) if name else ""
     if signup_code and not hmac.compare_digest(code.encode("utf-8"), str(signup_code).encode("utf-8")):
         st.error("That invite code is not valid.")
@@ -242,6 +247,8 @@ def handle_sign_up(name, pw1, pw2, code):
         st.error("Please enter a valid restaurant name.")
     elif storage.location_exists(slug):
         st.error("An account with this restaurant name already exists. Please sign in.")
+    elif not valid_email(email):
+        st.error("Please enter a valid email address. It's used if you ever forget your password.")
     elif len(pw1) < storage.MIN_PASSWORD_LENGTH:
         st.error(f"Your password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
     elif pw1 != pw2:
@@ -254,11 +261,96 @@ def handle_sign_up(name, pw1, pw2, code):
             "station": "New York",
             "currency": "$",
             "temp_unit": "F",
+            "owner_email": email,
+            "recipients": email,
             "password_hash": storage.hash_password(pw1),
         })
         storage.sync_to_cloud(slug)
         st.session_state["flash"] = ("success", f"Welcome, {name}! Your private workspace is ready.")
         start_session("client", slug)
+
+
+RESET_SENT_NOTE = (
+    "If this restaurant has a recovery email, we've sent a 6-digit code to it. "
+    f"It's valid for {storage.RESET_CODE_MINUTES} minutes."
+)
+
+
+def handle_send_reset_code(name):
+    """Email a reset code. The reply is the same whether or not the account exists (no account probing)."""
+    if not name:
+        st.error("Please enter your restaurant name.")
+        return
+    smtp = mailer.smtp_config(get_secret)
+    if smtp is None:
+        st.error("Password reset by email isn't set up on this server yet. Please contact the administrator.")
+        return
+    slug = storage.slugify(name)
+    email = storage.load_settings(slug).get("owner_email", "") if storage.location_exists(slug) else ""
+    if valid_email(email):
+        code = storage.create_reset_code(slug)
+        if code:  # None = a code was sent less than a minute ago; don't spam the inbox
+            message = mailer.build_email(
+                smtp["from"], [email], "Your TableCast password reset code",
+                f"Hello,\n\nyour code to reset the TableCast password for {storage.load_settings(slug).get('name', name)} is:\n\n"
+                f"    {code}\n\nIt's valid for {storage.RESET_CODE_MINUTES} minutes. "
+                "If you didn't ask for this, you can ignore this email; your password stays the same.\n",
+            )
+            try:
+                mailer.send_email(message, smtp)
+            except OSError:
+                st.error("We couldn't send the email right now. Please try again in a few minutes.")
+                return
+    st.session_state["reset_slug"] = slug
+    st.session_state["reset_sent"] = True
+    st.rerun()
+
+
+def handle_reset_password(code, pw1, pw2):
+    slug = st.session_state.get("reset_slug", "")
+    if len(pw1) < storage.MIN_PASSWORD_LENGTH:
+        st.error(f"Your new password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
+    elif pw1 != pw2:
+        st.error("The passwords don't match.")
+    elif not slug or not storage.use_reset_code(slug, code):
+        st.error("That code is wrong or has expired. You can request a new one.")
+    else:
+        storage.save_location_password(slug, pw1)
+        storage.clear_failed_logins(slug)  # a reset also lifts a sign-in lockout
+        storage.sync_to_cloud(slug)
+        for key in ("reset_slug", "reset_sent", "show_reset"):
+            st.session_state.pop(key, None)
+        st.session_state["flash"] = ("success", "Your password has been changed. You can sign in now.")
+        st.rerun()
+
+
+def render_password_reset():
+    """Step 1: ask for the restaurant and email a code. Step 2: code + new password."""
+    st.markdown("**Reset your password**")
+    if not st.session_state.get("reset_sent"):
+        with st.form("reset_request_form", border=False):
+            reset_name = st.text_input("Restaurant name", key="reset_rest_name", placeholder="Your restaurant's name")
+            send = st.form_submit_button("Email me a reset code", key="reset_send_btn", type="primary", width="stretch")
+        if send:
+            handle_send_reset_code(reset_name.strip())
+    else:
+        st.info(RESET_SENT_NOTE)
+        with st.form("reset_form", border=False):
+            reset_code = st.text_input("6-digit code", key="reset_code", max_chars=6)
+            reset_pw1 = st.text_input(
+                f"New password (at least {storage.MIN_PASSWORD_LENGTH} characters)", type="password", key="reset_pw1"
+            )
+            reset_pw2 = st.text_input("Confirm new password", type="password", key="reset_pw2")
+            do_reset = st.form_submit_button("Set new password", key="reset_submit_btn", type="primary", width="stretch")
+        if do_reset:
+            handle_reset_password(reset_code.strip(), reset_pw1, reset_pw2)
+        if st.button("Didn't get it? Send a new code", key="reset_restart_btn", type="tertiary"):
+            st.session_state.pop("reset_sent", None)
+            st.rerun()
+    if st.button("← Back to sign in", key="reset_back_btn", type="tertiary"):
+        for key in ("reset_slug", "reset_sent", "show_reset"):
+            st.session_state.pop(key, None)
+        st.rerun()
 
 
 if need_login and not st.session_state.authed:
@@ -267,15 +359,25 @@ if need_login and not st.session_state.authed:
         ui.md(ui.login_header(BRAND, "Staffing, prep and revenue forecasts for your restaurant."))
         tab_signin, tab_signup = st.tabs(["Sign in", "Create account"])
         with tab_signin:
-            with st.form("signin_form", border=False):
-                login_name = st.text_input("Restaurant name", key="login_rest_name", placeholder="Your restaurant's name")
-                entered_pw = st.text_input("Password", type="password", key="password_input")
-                signin = st.form_submit_button("Sign in", key="login_submit_btn", type="primary", width="stretch")
-            if signin:
-                handle_sign_in(login_name.strip(), entered_pw)
+            if st.session_state.get("show_reset"):
+                render_password_reset()
+            else:
+                with st.form("signin_form", border=False):
+                    login_name = st.text_input("Restaurant name", key="login_rest_name", placeholder="Your restaurant's name")
+                    entered_pw = st.text_input("Password", type="password", key="password_input")
+                    signin = st.form_submit_button("Sign in", key="login_submit_btn", type="primary", width="stretch")
+                if signin:
+                    handle_sign_in(login_name.strip(), entered_pw)
+                if st.button("Forgot password?", key="forgot_btn", type="tertiary"):
+                    st.session_state["show_reset"] = True
+                    st.rerun()
         with tab_signup:
             with st.form("signup_form", border=False):
                 new_name = st.text_input("Restaurant name", key="signup_rest_name", placeholder="e.g. Harbor Bistro")
+                new_email = st.text_input(
+                    "Email", key="signup_email", placeholder="you@restaurant.com",
+                    help="Used to reset your password and as the default address for weekly reports.",
+                )
                 new_pw1 = st.text_input(
                     f"Password (at least {storage.MIN_PASSWORD_LENGTH} characters)", type="password", key="signup_pw1"
                 )
@@ -283,7 +385,7 @@ if need_login and not st.session_state.authed:
                 invite = st.text_input("Invite code", key="signup_code") if signup_code else ""
                 create = st.form_submit_button("Create account", key="signup_submit_btn", type="primary", width="stretch")
             if create:
-                handle_sign_up(new_name.strip(), new_pw1, new_pw2, invite.strip())
+                handle_sign_up(new_name.strip(), new_email.strip(), new_pw1, new_pw2, invite.strip())
         st.divider()
         if st.button("Try the demo (no account needed)", key="login_demo_btn", width="stretch"):
             st.session_state.use_demo = True
@@ -440,8 +542,15 @@ with st.sidebar.expander(L["sec_events"], expanded=bool(saved_events)):
 # --- Account & email ---
 new_loc_password = ""
 recipients_text = ""
+owner_email = settings.get("owner_email", "")
 if not guest_demo:
-    with st.sidebar.expander(L["sec_account"]):
+    with st.sidebar.expander(L["sec_account"], expanded=bool(settings) and not owner_email):
+        owner_email = st.text_input(
+            "Recovery email", value=owner_email, key=f"owner_email_{slug}",
+            help="Where a code is sent if you forget your password. Not shown to anyone.",
+        ).strip()
+        if settings and not owner_email:
+            st.caption("Add a recovery email so you can reset your password if you forget it.")
         recipients_text = st.text_input(
             t["email_recipients"], value=settings.get("recipients", ""), key=f"recipients_{slug}"
         )
@@ -482,7 +591,20 @@ if uploaded_file is not None:
     if len(visits) < core.MIN_DAYS:
         st.error(t["err_too_short"].format(min=core.MIN_DAYS, found=len(visits)))
         st.stop()
-    st.toast(t["success_loaded"].format(n=len(visits)), icon="✅")
+    # Auto-save into an existing workspace, once per uploaded file (the uploader keeps the
+    # file across reruns, so remember which file was already saved).
+    upload_id = f"{slug}:{hashlib.sha1(uploaded_file.getvalue()).hexdigest()}"
+    if not guest_demo and slug in saved_names:
+        if st.session_state.get("autosaved_upload") != upload_id:
+            new_days = len(visits) - (0 if saved_visits is None else len(saved_visits))
+            storage.save_visits(slug, upload_clean)
+            storage.sync_to_cloud(slug)
+            st.session_state["autosaved_upload"] = upload_id
+            st.toast(f"Saved to {loc_name}: {len(visits)} days in total, {new_days} new.", icon="✅")
+    else:
+        st.toast(t["success_loaded"].format(n=len(visits)), icon="✅")
+        if not guest_demo:
+            st.sidebar.caption("New location: click the Save button below to keep this data.")
 elif saved_visits is not None:
     st.session_state.use_demo = False
     visits = saved_visits
@@ -497,6 +619,8 @@ if not guest_demo:
             st.sidebar.error(t["err_location_name"])
         elif new_loc_password and len(new_loc_password) < storage.MIN_PASSWORD_LENGTH:
             st.sidebar.error(f"The password needs at least {storage.MIN_PASSWORD_LENGTH} characters.")
+        elif owner_email and not valid_email(owner_email):
+            st.sidebar.error("The recovery email doesn't look like a valid address.")
         else:
             storage.save_visits(slug, visits)
             storage.save_settings(slug, {
@@ -513,6 +637,7 @@ if not guest_demo:
                 "dinner_spend": dinner_spend,
                 "guests_per_server": int(guests_per_server),
                 "recipients": recipients_text,
+                "owner_email": owner_email,
                 # The prep tab is drawn further down, so read its current values from session state.
                 "prep_items": st.session_state.get(f"prep_items_list_{slug}", settings.get("prep_items")),
                 "prep_buffer": int(st.session_state.get(f"prep_buf_{slug}", settings.get("prep_buffer", 10))),
