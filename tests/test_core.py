@@ -91,6 +91,31 @@ def test_build_plan_ranges_contain_the_forecast():
         assert row["low"] <= row["expected"] <= row["high"]
 
 
+def test_batched_forecasts_match_one_at_a_time():
+    """forecast_many (used by the backtest for speed) must give exactly what separate calls give."""
+    bundle = core.train_bundle(make_visits(days=150), "Vienna", "AT")
+    history, fc = bundle["history"], bundle["forecaster"]
+    jobs = []
+    for cut in (-30, -20, -9):
+        past = history.iloc[:cut].tail(core.LOOKBACK_DAYS)
+        future = pd.date_range(past.index[-1] + pd.Timedelta(days=1), periods=core.HORIZON)
+        jobs.append((past, history.loc[future, ["temp", "rain"]]))
+    for batched, (past, weather) in zip(fc.forecast_many(jobs), jobs):
+        pd.testing.assert_series_equal(batched, fc.forecast(past, weather))
+
+
+def test_models_run_on_limited_threads():
+    """Guards the Streamlit Cloud CPU fix: no 'use every core' settings sneak back in."""
+    model = core.fit_forest(*_tiny_training_set())
+    assert model.rf_model.n_jobs == 1
+    assert core.N_THREADS >= 1
+
+
+def _tiny_training_set():
+    X = pd.DataFrame(np.random.default_rng(0).random((50, len(core.FEATURES))), columns=core.FEATURES)
+    return X, pd.Series(np.arange(50, dtype=float) + 10)
+
+
 # ---------------------------------------------------------------- training end-to-end
 def test_train_bundle_and_forecast_offline():
     visits = make_visits(days=150)

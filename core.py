@@ -5,6 +5,7 @@ Shared by app.py (the UI) and weekly_report.py (scheduled emails).
 import io
 import json
 import math
+import os
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -16,8 +17,15 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+from threadpoolctl import threadpool_limits
 
-MIN_DAYS = 60            # minimum rows of valid history
+# Hosted containers (e.g. Streamlit Cloud) report many CPU cores but only grant a small CPU
+# quota. Spreading hundreds of tiny one-row predictions over every core then costs ~10x more
+# CPU (measured: 160 s -> 16 s per training, identical results) and gets the app throttled.
+# So the models run on N_THREADS threads; raise TABLECAST_THREADS on a dedicated machine.
+N_THREADS = max(1, int(os.environ.get("TABLECAST_THREADS", "1")))
+
+MIN_DAYS = 60           # minimum rows of valid history
 MIN_TRAIN_ROWS = 40      # minimum rows left after feature engineering
 LOOKBACK_DAYS = 60       # history window needed to compute features for one day
 HORIZON = 7              # planner length in days
@@ -333,37 +341,41 @@ def build_features(frame, holiday_dates, country="FR"):
     """frame: daily-calendar DataFrame with columns visitors (NaN = closed/unknown), temp, rain.
     Every lag uses only data from BEFORE the row's own day."""
     idx = frame.index
-    out = pd.DataFrame(index=idx)
-
     dow = idx.dayofweek.to_numpy()
     day = idx.day.to_numpy()
     days_in_month = idx.days_in_month.to_numpy()
-    out["day_of_week"] = dow
-    out["is_weekend"] = (dow >= 5).astype(int)
-    out["month"] = idx.month.to_numpy()
-    out["day_of_month"] = day
-    out["is_payday"] = ((day == 1) | (day == 15) | (day >= 25) | (day >= days_in_month - 2)).astype(int)
-    out["is_holiday"] = idx.isin(holiday_dates).astype(int)
-    out["is_holiday_tomorrow"] = (idx + pd.Timedelta(days=1)).isin(holiday_dates).astype(int)
-    out["is_school_break"] = school_break_flags(idx, country)
-    out["temp"] = frame["temp"].to_numpy()
-    out["rain"] = frame["rain"].to_numpy()
-    out["rain_weekend_penalty"] = out["rain"] * out["is_weekend"]
-    out["is_patio_weather"] = ((out["temp"] >= 18.0) & (out["rain"] <= 0.5)).astype(int)
+    is_weekend = (dow >= 5).astype(int)
+    temp = frame["temp"].to_numpy(dtype=float)
+    rain = frame["rain"].to_numpy(dtype=float)
 
     visitors = frame["visitors"]
     past = visitors.shift(1)
     avg7 = past.rolling(7, min_periods=3).mean()
     avg30 = past.rolling(30, min_periods=10).mean()
-    out["visitors_7d_avg"] = avg7
-    out["visitors_30d_avg"] = avg30
-    out["visitors_7d_max"] = past.rolling(7, min_periods=3).max()
-    out["visitors_30d_max"] = past.rolling(30, min_periods=10).max()
-    out["post_closure_surge"] = past.isna().astype(int)
-    out["visitors_yesterday"] = past.fillna(avg7)
-    out["visitors_same_day_last_week"] = visitors.shift(7).fillna(avg7)
-    out["momentum_ratio"] = (avg7 / avg30.replace(0, np.nan)).fillna(1.0).clip(0.5, 2.0)
-    return out
+
+    # Built in one go (not column by column): this runs hundreds of times per training.
+    return pd.DataFrame({
+        "day_of_week": dow,
+        "is_weekend": is_weekend,
+        "month": idx.month.to_numpy(),
+        "day_of_month": day,
+        "is_payday": ((day == 1) | (day == 15) | (day >= 25) | (day >= days_in_month - 2)).astype(int),
+        "is_holiday": idx.isin(holiday_dates).astype(int),
+        "is_holiday_tomorrow": (idx + pd.Timedelta(days=1)).isin(holiday_dates).astype(int),
+        "is_school_break": school_break_flags(idx, country),
+        "temp": temp,
+        "rain": rain,
+        "rain_weekend_penalty": rain * is_weekend,
+        "is_patio_weather": ((temp >= 18.0) & (rain <= 0.5)).astype(int),
+        "visitors_7d_avg": avg7.to_numpy(),
+        "visitors_30d_avg": avg30.to_numpy(),
+        "visitors_7d_max": past.rolling(7, min_periods=3).max().to_numpy(),
+        "visitors_30d_max": past.rolling(30, min_periods=10).max().to_numpy(),
+        "post_closure_surge": past.isna().astype(int).to_numpy(),
+        "visitors_yesterday": past.fillna(avg7).to_numpy(),
+        "visitors_same_day_last_week": visitors.shift(7).fillna(avg7).to_numpy(),
+        "momentum_ratio": (avg7 / avg30.replace(0, np.nan)).fillna(1.0).clip(0.5, 2.0).to_numpy(),
+    }, index=idx)
 
 
 def detect_closed_weekdays(visits, calendar_index):
@@ -409,7 +421,7 @@ class TrendAwareEnsemble:
 
 
 def fit_forest(X, y):
-    rf = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+    rf = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=N_THREADS)
     rf.fit(X, y)
     rf.set_params(n_jobs=1)
 
@@ -429,19 +441,38 @@ class Forecaster:
     country: str = "FR"
 
     def forecast(self, history: pd.DataFrame, future_weather: pd.DataFrame) -> pd.Series:
-        frame = history[["visitors", "temp", "rain"]].copy()
-        preds = {}
-        for d, w in future_weather.iterrows():
-            frame.loc[d] = [np.nan, float(w["temp"]), float(w["rain"])]
-            if d.dayofweek in self.closed_weekdays:
-                preds[d] = np.nan
-                continue
-            feats = build_features(frame.tail(LOOKBACK_DAYS), self.holiday_dates, self.country)
-            X = feats[FEATURES].iloc[[-1]].fillna(self.medians)
-            pred = max(0.0, float(self.model.predict(X)[0]))
-            frame.loc[d, "visitors"] = pred
-            preds[d] = pred
-        return pd.Series(preds, dtype=float)
+        return self.forecast_many([(history, future_weather)])[0]
+
+    def forecast_many(self, jobs):
+        """Recursive day-by-day forecasts for several (history, future_weather) pairs at once.
+
+        Each day's prediction feeds the next day's features, so days stay sequential, but the
+        pairs are independent: step k of every pair is predicted in ONE model call. Results are
+        identical to forecasting each pair alone; the backtest just makes 7 model calls instead
+        of ~800 (each call has a fixed cost across 200 trees)."""
+        with threadpool_limits(N_THREADS):
+            frames = [history[["visitors", "temp", "rain"]].copy() for history, _ in jobs]
+            preds = [{} for _ in jobs]
+            for step in range(max((len(w) for _, w in jobs), default=0)):
+                rows, owners = [], []
+                for i, (_, weather) in enumerate(jobs):
+                    if step >= len(weather):
+                        continue
+                    d, w = weather.index[step], weather.iloc[step]
+                    frames[i].loc[d] = [np.nan, float(w["temp"]), float(w["rain"])]
+                    if d.dayofweek in self.closed_weekdays:
+                        preds[i][d] = np.nan
+                        continue
+                    feats = build_features(frames[i].tail(LOOKBACK_DAYS), self.holiday_dates, self.country)
+                    rows.append(feats[FEATURES].iloc[[-1]].fillna(self.medians))
+                    owners.append((i, d))
+                if rows:
+                    values = self.model.predict(pd.concat(rows))
+                    for (i, d), value in zip(owners, values):
+                        pred = max(0.0, float(value))
+                        frames[i].loc[d, "visitors"] = pred
+                        preds[i][d] = pred
+            return [pd.Series(p, dtype=float) for p in preds]
 
 
 def validate_seven_day(forecaster, history, features, first_test_date):
@@ -452,13 +483,17 @@ def validate_seven_day(forecaster, history, features, first_test_date):
     horizon_delta = pd.Timedelta(days=HORIZON)
     last_date = history.index[-1]
     origin = first_test_date - pd.Timedelta(days=1)
-    actual_all, model_all, base_all = [], [], []
-    ratios = {h: [] for h in range(1, HORIZON + 1)}
+    windows, jobs = [], []
     while origin + horizon_delta <= last_date:
         future = pd.date_range(origin + pd.Timedelta(days=1), periods=HORIZON, freq="D")
-        preds = forecaster.forecast(
-            history.loc[:origin].tail(LOOKBACK_DAYS), history.loc[future, ["temp", "rain"]]
-        ).reindex(future)
+        windows.append(future)
+        jobs.append((history.loc[:origin].tail(LOOKBACK_DAYS), history.loc[future, ["temp", "rain"]]))
+        origin += step
+
+    actual_all, model_all, base_all = [], [], []
+    ratios = {h: [] for h in range(1, HORIZON + 1)}
+    for future, preds in zip(windows, forecaster.forecast_many(jobs)):
+        preds = preds.reindex(future)
         actual = history.loc[future, "visitors"]
         base = features.loc[future, "visitors_same_day_last_week"]
         ok = (actual.notna() & preds.notna() & base.notna()).to_numpy()
@@ -469,7 +504,6 @@ def validate_seven_day(forecaster, history, features, first_test_date):
         for i in range(HORIZON):
             if np.isfinite(pred_arr[i]) and np.isfinite(act_arr[i]) and pred_arr[i] > 0:
                 ratios[i + 1].append(float(act_arr[i] / pred_arr[i]))
-        origin += step
     if not actual_all:
         return {"wape7": float("nan"), "base_wape7": float("nan"), "ratios_by_h": ratios}
     a = np.concatenate(actual_all)
@@ -498,7 +532,12 @@ def compute_intervals(ratios_by_h):
 def train_bundle(visits, station, country, events=None):
     """Everything expensive, computed once per (data, station, country, events).
     Returns None when there is not enough usable history."""
-    calendar = pd.date_range(visits["visit_date"].min(), visits["visit_date"].max(), freq="D")
+    with threadpool_limits(N_THREADS):
+        return _train_bundle(visits, station, country, events)
+
+
+def _train_bundle(visits, station, country, events):
+    calendar =pd.date_range(visits["visit_date"].min(), visits["visit_date"].max(), freq="D")
     raw_visitors = visits.set_index("visit_date")["visitors"].reindex(calendar)
     if events:
         extra_series = pd.Series(
