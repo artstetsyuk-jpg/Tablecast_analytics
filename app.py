@@ -498,11 +498,15 @@ with st.sidebar.expander(L["sec_location"]):
             (i for i, code in enumerate(subdiv_map.values()) if code and code == saved_subdiv), 0
         )
         picked_subdiv_label = st.selectbox(
-            L["f_subdiv"], subdiv_labels, index=default_sub_idx, key=f"subdiv_{slug}_{country}"
+            L["f_subdiv"], subdiv_labels, index=default_sub_idx, key=f"subdiv_{slug}_{country}",
+            format_func=lambda label: L["subdiv_auto"] if not subdiv_map[label] else label,
         )
         subdiv_code = subdiv_map[picked_subdiv_label]
     if not subdiv_code and geo_info.get("admin1"):
-        subdiv_code = ADMIN1_TO_SUBDIV.get(geo_info["admin1"], "")
+        # Only accept a state that belongs to the chosen country (state names alone can collide).
+        auto_code = ADMIN1_TO_SUBDIV.get(geo_info["admin1"], "")
+        if auto_code in COUNTRY_SUBDIVISIONS.get(country, {}).values():
+            subdiv_code = auto_code
     holiday_country = f"{country}-{subdiv_code}" if subdiv_code else country
 
     if geo_info["matched"]:

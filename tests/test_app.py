@@ -186,3 +186,27 @@ def test_german_is_the_default_language():
     assert at.selectbox(key="language_selector").value == "German"
     labels = [b.label for b in at.button]
     assert "Anmelden" in labels and "Demo ausprobieren (ohne Konto)" in labels
+
+
+def _geo(admin1):
+    return lambda query, country="US": {"lat": 48.8, "lon": 9.2, "name": query, "admin1": admin1,
+                                        "country_code": country, "matched": True}
+
+
+def test_state_holidays_are_picked_from_the_city(account, monkeypatch):
+    import core
+    storage.save_settings(account, {**storage.load_settings(account), "country": "DE", "station": "Stuttgart"})
+    monkeypatch.setattr(core, "resolve_location_info", _geo("Baden-Wurttemberg"))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    assert any("DE-BW" in c.value for c in at.caption)
+
+
+def test_a_state_from_another_country_is_never_used(account, monkeypatch):
+    import core
+    # "Victoria" is an Australian state; a city with that admin1 in Germany must not become DE-VIC
+    storage.save_settings(account, {**storage.load_settings(account), "country": "DE", "station": "Somewhere"})
+    monkeypatch.setattr(core, "resolve_location_info", _geo("Victoria"))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    assert not any("DE-VIC" in c.value for c in at.caption)

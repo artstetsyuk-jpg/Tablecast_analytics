@@ -107,6 +107,27 @@ COUNTRY_SUBDIVISIONS = {
         "Wales (WLS)": "WLS",
         "Northern Ireland (NIR)": "NIR",
     },
+    # Germany: states differ (e.g. Baden-Württemberg/Bayern have 3 extra public holidays).
+    # Austria is not listed on purpose: all 9 states share the same public holidays.
+    "DE": {
+        "Auto (From City)": "",
+        "Baden-Württemberg (BW)": "BW",
+        "Bayern (BY)": "BY",
+        "Berlin (BE)": "BE",
+        "Brandenburg (BB)": "BB",
+        "Bremen (HB)": "HB",
+        "Hamburg (HH)": "HH",
+        "Hessen (HE)": "HE",
+        "Mecklenburg-Vorpommern (MV)": "MV",
+        "Niedersachsen (NI)": "NI",
+        "Nordrhein-Westfalen (NW)": "NW",
+        "Rheinland-Pfalz (RP)": "RP",
+        "Saarland (SL)": "SL",
+        "Sachsen (SN)": "SN",
+        "Sachsen-Anhalt (ST)": "ST",
+        "Schleswig-Holstein (SH)": "SH",
+        "Thüringen (TH)": "TH",
+    },
 }
 
 # Maps Open-Meteo's `admin1` state name to the `holidays` subdivision code
@@ -132,6 +153,12 @@ ADMIN1_TO_SUBDIV = {
     # Canada & UK
     "Ontario": "ON", "British Columbia": "BC", "Quebec": "QC", "Alberta": "AB",
     "England": "ENG", "Scotland": "SCT", "Wales": "WLS", "Northern Ireland": "NIR",
+    # Germany (names exactly as the geocoder returns them, in English)
+    "Baden-Wurttemberg": "BW", "Baden-Württemberg": "BW", "Bavaria": "BY", "State of Berlin": "BE",
+    "Brandenburg": "BB", "Free Hanseatic City of Bremen": "HB", "Free and Hanseatic City of Hamburg": "HH",
+    "Hesse": "HE", "Mecklenburg-Vorpommern": "MV", "Lower Saxony": "NI", "North Rhine-Westphalia": "NW",
+    "Rhineland-Palatinate": "RP", "Saarland": "SL", "Saxony": "SN", "Saxony-Anhalt": "ST",
+    "Schleswig-Holstein": "SH", "Thuringia": "TH",
 }
 
 TRANSLATIONS = {
@@ -528,7 +555,7 @@ UI_LABELS = {
 # ----------------------------------------------------------------------------
 _APP_TEXT = {
     "English": {
-        "lang_name": "English",
+        "lang_name": "English", "subdiv_auto": "Automatic (from the city)",
         "login_sub": "Staffing, prep and revenue forecasts for your restaurant.",
         "tab_signin": "Sign in", "tab_signup": "Create account",
         "f_rest_name": "Restaurant name", "ph_rest_name": "Your restaurant's name", "ph_new_rest": "e.g. Harbor Bistro",
@@ -596,7 +623,7 @@ _APP_TEXT = {
         "dl_ics": "Calendar (.ics)",
     },
     "German": {
-        "lang_name": "Deutsch",
+        "lang_name": "Deutsch", "subdiv_auto": "Automatisch (aus der Stadt)",
         "login_sub": "Personal-, Vorbereitungs- und Umsatzprognosen für Ihr Lokal.",
         "tab_signin": "Anmelden", "tab_signup": "Konto erstellen",
         "f_rest_name": "Name des Lokals", "ph_rest_name": "Name Ihres Lokals", "ph_new_rest": "z. B. Café am Hafen",
@@ -664,7 +691,7 @@ _APP_TEXT = {
         "dl_ics": "Kalender (.ics)",
     },
     "French": {
-        "lang_name": "Français",
+        "lang_name": "Français", "subdiv_auto": "Automatique (selon la ville)",
         "login_sub": "Prévisions de personnel, de préparation et de chiffre d'affaires pour votre restaurant.",
         "tab_signin": "Connexion", "tab_signup": "Créer un compte",
         "f_rest_name": "Nom du restaurant", "ph_rest_name": "Le nom de votre restaurant", "ph_new_rest": "ex. Bistro du Port",

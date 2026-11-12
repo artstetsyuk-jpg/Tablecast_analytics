@@ -133,3 +133,20 @@ def test_train_bundle_and_forecast_offline():
     assert len(preds) == core.HORIZON
     for d, value in preds.items():
         assert np.isnan(value) if d.dayofweek == 0 else value > 0
+
+
+# ---------------------------------------------------------------- regional holidays
+def test_german_states_are_valid_and_add_their_holidays():
+    import holidays
+    import i18n
+    valid = set(holidays.country_holidays("DE").__class__.subdivisions)
+    codes = {c for c in i18n.COUNTRY_SUBDIVISIONS["DE"].values() if c}
+    assert len(codes) == 16 and codes <= valid
+    # every geocoder name we map for Germany points at a real German state
+    german_names = [n for n, c in i18n.ADMIN1_TO_SUBDIV.items() if c in codes and n not in ("Delaware",)]
+    assert len(german_names) >= 16
+    # Baden-Württemberg really gets its extra holidays (e.g. Fronleichnam)
+    idx = pd.date_range("2015-01-01", "2015-12-31")
+    national = core.get_holiday_dates("DE", idx)
+    bw = core.get_holiday_dates("DE-BW", idx)
+    assert pd.Timestamp("2015-06-04") in bw and pd.Timestamp("2015-06-04") not in national
