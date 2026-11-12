@@ -106,16 +106,41 @@ def load_visits(slug):
         return None
     df = pd.read_csv(path, parse_dates=["visit_date"])
     df["visitors"] = pd.to_numeric(df["visitors"], errors="coerce")
-    return df.dropna().sort_values("visit_date").reset_index(drop=True)
+    extras = [c for c in df.columns if c == "reservations" or str(c).startswith("event_")]
+    # Keep rows with a guest count, plus future rows that only carry events/reservations.
+    keep = df["visit_date"].notna() & (df["visitors"].notna() | df[extras].notna().any(axis=1) if extras
+                                       else df["visitors"].notna())
+    return df[keep].sort_values("visit_date").reset_index(drop=True)
 
 
 def merge_visits(existing, new):
-    """Combine saved history with newly uploaded days; for the same date the new value wins."""
+    """Combine saved history with newly uploaded days; for the same date the new value wins.
+    Optional columns (reservations, event_*) from either side are kept."""
     if existing is None or len(existing) == 0:
         return new.sort_values("visit_date").reset_index(drop=True)
     combined = pd.concat([existing, new], ignore_index=True)
     combined = combined.drop_duplicates("visit_date", keep="last").sort_values("visit_date")
     return combined.reset_index(drop=True)
+
+
+def set_known_value(slug, day, column, value):
+    """Mark a known input for one day, e.g. set_known_value(slug, date, 'event_home_match', 1).
+    Creates the column / a future row when needed."""
+    visits = load_visits(slug)
+    if visits is None:
+        return None
+    day = pd.Timestamp(day).normalize()
+    if column not in visits.columns:
+        visits[column] = 0.0
+    if (visits["visit_date"] == day).any():
+        visits.loc[visits["visit_date"] == day, column] = float(value)
+    else:
+        row = {c: np.nan for c in visits.columns}
+        row.update({"visit_date": day, column: float(value)})
+        visits = pd.concat([visits, pd.DataFrame([row])], ignore_index=True)
+    folder = _location_dir(slug)
+    visits.sort_values("visit_date").to_csv(folder / "visits.csv", index=False)
+    return visits
 
 
 def save_visits(slug, visits):
@@ -191,7 +216,8 @@ def compare_log_to_actuals(log, visits):
     log["made_on"] = pd.to_datetime(log["made_on"])
     log = log[log["made_on"] < log["target_date"]]
     latest = log.sort_values("made_on").drop_duplicates("target_date", keep="last")
-    actuals = visits.rename(columns={"visit_date": "target_date", "visitors": "actual"})
+    actuals = (visits[visits["visitors"].notna()][["visit_date", "visitors"]]
+               .rename(columns={"visit_date": "target_date", "visitors": "actual"}))
     merged = latest.merge(actuals, on="target_date", how="inner").sort_values("target_date")
     return merged[columns].reset_index(drop=True)
 

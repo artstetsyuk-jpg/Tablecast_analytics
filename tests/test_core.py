@@ -150,3 +150,81 @@ def test_german_states_are_valid_and_add_their_holidays():
     national = core.get_holiday_dates("DE", idx)
     bw = core.get_holiday_dates("DE-BW", idx)
     assert pd.Timestamp("2015-06-04") in bw and pd.Timestamp("2015-06-04") not in national
+
+
+# ---------------------------------------------------------------- optional ideas
+def test_clean_visits_keeps_reservations_events_and_future_rows():
+    days = pd.date_range("2025-01-01", periods=70).strftime("%Y-%m-%d").tolist()
+    raw = pd.DataFrame({
+        "date": days + ["2025-03-20", "2025-03-21"],
+        "covers": [100] * 70 + [None, None],
+        "bookings": [20] * 70 + [35, None],
+        "event_market": [0] * 70 + [0, 1],
+    })
+    clean, _, error = core.clean_visits(raw)
+    assert error is None
+    assert {"reservations", "event_market"} <= set(clean.columns)
+    assert len(core.history_only(clean)) == 70
+    future = clean[clean.visitors.isna()]
+    assert list(future.visit_date.dt.strftime("%m-%d")) == ["03-20", "03-21"]
+
+
+def test_austrian_school_holidays_follow_the_state_rules():
+    vienna = core.austrian_school_holidays([2024], "9")
+    tyrol = core.austrian_school_holidays([2024], "7")
+    assert pd.Timestamp("2024-02-05") in vienna and pd.Timestamp("2024-02-05") not in tyrol   # semester week 1 vs 2
+    assert pd.Timestamp("2024-02-12") in tyrol
+    assert pd.Timestamp("2024-07-01") in vienna and pd.Timestamp("2024-07-01") not in tyrol   # east starts earlier
+    assert pd.Timestamp("2024-11-15") in vienna                                              # Leopold
+    assert pd.Timestamp("2024-03-19") in tyrol                                               # Josef
+
+
+def test_bridge_day_after_ascension_is_detected():
+    idx = pd.date_range("2015-05-01", "2015-05-31")
+    frame = pd.DataFrame({"visitors": 100.0, "temp": 15.0, "rain": 0.0}, index=idx)
+    ctx = core.FeatureContext(core.get_holiday_dates("DE", idx), "DE", dict(core.FEATURE_OPTIONS))
+    feats = core.build_features(frame, ctx)
+    assert feats.loc["2015-05-15", "is_bridge_day"] == 1   # Friday after Ascension Thursday
+    assert feats.loc["2015-05-13", "is_bridge_day"] == 0
+
+
+def _signal_data(column, effect):
+    """Guests depend strongly on `column` (reservations or an event flag) on top of a weekly pattern."""
+    rng = np.random.default_rng(3)
+    v = make_visits(days=240)
+    if column == "reservations":
+        v[column] = rng.integers(0, 80, len(v)).astype(float)
+        v["visitors"] = v["visitors"] + effect * v[column]
+    else:
+        v[column] = (rng.random(len(v)) < 0.12).astype(float)
+        v["visitors"] = v["visitors"] * (1 + effect * v[column])
+    return v
+
+
+def test_reservations_and_events_are_used_when_they_carry_signal():
+    for column, effect in (("reservations", 1.5), ("event_fair", 0.6)):
+        v = _signal_data(column, effect)
+        without = core.train_bundle(v, "X", "DE", options=core.NO_OPTIONS)["wape7"]
+        option = "reservations" if column == "reservations" else "events"
+        with_it = core.train_bundle(v, "X", "DE", options={**core.NO_OPTIONS, option: True})["wape7"]
+        assert with_it < without * 0.8, (column, without, with_it)
+
+
+def test_model_presets_and_custom_blends():
+    X, y = _tiny_training_set()
+    assert core.fit_model(X, y, "classic").keys == ("random_forest", "gradient_boosting_ratio")
+    assert core.fit_model(X, y, ("ridge", "extra_trees")).keys == ("ridge", "extra_trees")
+    assert core.fit_model(X, y, "ridge").keys == ("ridge",)
+    assert core.fit_model(X, y, ("not_a_model",)).keys == core.DEFAULT_MODEL
+
+
+def test_direct_and_recursive_modes_both_produce_seven_days():
+    v = make_visits(days=150)
+    for direct in (False, True):
+        b = core.train_bundle(v, "Vienna", "AT-9", options={**core.FEATURE_OPTIONS, "direct": direct})
+        assert np.isfinite(b["wape7"])
+        history = b["history"]
+        future = core.future_dates_after(history)
+        preds = b["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS + core.HORIZON),
+                                         pd.DataFrame({"temp": 15.0, "rain": 0.0}, index=future))
+        assert len(preds) == 7 and preds.notna().sum() == 6   # Mondays are closed in make_visits

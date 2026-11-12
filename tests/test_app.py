@@ -210,3 +210,13 @@ def test_a_state_from_another_country_is_never_used(account, monkeypatch):
     at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
     assert not at.exception
     assert not any("DE-VIC" in c.value for c in at.caption)
+
+
+def test_model_menu_and_custom_blend_work(account):
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    at = at.selectbox(key=f"model_{account}").set_value("custom").run()
+    at = at.multiselect(key=f"members_{account}").set_value(["ridge", "extra_trees"]).run()
+    assert not at.exception
+    at = at.selectbox(key=f"model_{account}").set_value("classic").run()
+    at = at.checkbox(key=f"opt_direct_{account}").uncheck().run()
+    assert not at.exception

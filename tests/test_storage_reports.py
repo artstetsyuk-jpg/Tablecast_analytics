@@ -97,3 +97,13 @@ def test_pdf_is_generated():
 
 def test_parse_recipients():
     assert mailer.parse_recipients("a@x.com, bad, b@y.org; c@z") == ["a@x.com", "b@y.org"]
+
+
+def test_known_values_and_future_rows_survive_saving(visits):
+    storage.save_visits("bistro", visits)
+    future_day = visits.visit_date.max() + pd.Timedelta(days=3)
+    storage.set_known_value("bistro", future_day, "event_home_match", 1)
+    loaded = storage.load_visits("bistro")
+    assert "event_home_match" in loaded.columns
+    row = loaded[loaded.visit_date == future_day]
+    assert len(row) == 1 and row.visitors.isna().all() and row.event_home_match.iloc[0] == 1

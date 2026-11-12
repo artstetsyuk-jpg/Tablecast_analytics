@@ -86,8 +86,9 @@ def cached_read_csv(raw_bytes):
 
 
 @st.cache_resource(show_spinner=False)
-def cached_train(visits, station, country, events=None):
-    return core.train_bundle(visits, station, country, events=events)
+def cached_train(visits, station, country, events=None, model_spec=None, options_items=()):
+    return core.train_bundle(visits, station, country, events=events, model_spec=model_spec,
+                             options=dict(options_items))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -461,6 +462,7 @@ saved_visits = storage.load_visits(slug) if slug in saved_names else None
 with st.sidebar.expander(L["sec_data"], expanded=saved_visits is None):
     uploaded_file = st.file_uploader(t["upload_prompt"], type=["csv"], key="csv_file_uploader")
     st.caption(t["req_format"])
+    st.caption(L["events_csv_hint"])
 
 # --- Location & calendar ---
 with st.sidebar.expander(L["sec_location"]):
@@ -573,6 +575,52 @@ with st.sidebar.expander(L["sec_events"], expanded=bool(saved_events)):
     if saved_events:
         st.caption(L["saved_events"].format(list=", ".join(f"{k} (+{v})" for k, v in sorted(saved_events.items()))))
 
+    # Local events the model LEARNS from (stored as event_<type> columns next to the guest counts)
+    if not guest_demo and saved_visits is not None:
+        st.markdown(f"**{L['mark_event']}**")
+        known_types = [c[len("event_"):] for c in saved_visits.columns if str(c).startswith("event_")]
+        new_label = L["f_new_event"]
+        picked_type = st.selectbox(L["f_event_type"], known_types + [new_label], key=f"event_type_{slug}")
+        if picked_type == new_label:
+            picked_type = st.text_input(new_label, key=f"event_new_{slug}").strip()
+        local_event_day = st.date_input(t["event_date"], value=date.today(), key=f"event_day_{slug}")
+        if st.button(L["btn_mark_event"], key=f"mark_event_btn_{slug}", width="stretch") and picked_type:
+            column = "event_" + storage.slugify(picked_type).replace("-", "_")
+            storage.set_known_value(slug, local_event_day, column, 1)
+            storage.sync_to_cloud(slug)
+            st.session_state["flash"] = ("success", L["event_marked"])
+            st.rerun()
+
+# --- Model & accuracy ---
+saved_model = settings.get("model", "recommended")
+with st.sidebar.expander(L["sec_model"]):
+    model_choices = ["recommended", "classic"] + core.MODEL_MEMBERS + ["custom"]
+
+    def model_label(key):
+        return L.get(f"m_{key}") or L.get(f"mem_{key}", key)
+
+    if isinstance(saved_model, list):
+        default_choice = "custom"
+    else:
+        default_choice = saved_model if saved_model in model_choices else "recommended"
+    model_choice = st.selectbox(L["f_model"], model_choices, index=model_choices.index(default_choice),
+                                format_func=model_label, key=f"model_{slug}")
+    if model_choice == "custom":
+        default_members = saved_model if isinstance(saved_model, list) else list(core.DEFAULT_MODEL)
+        members = st.multiselect(L["f_members"], core.MODEL_MEMBERS,
+                                 default=[m for m in default_members if m in core.MODEL_MEMBERS],
+                                 format_func=lambda k: L.get(f"mem_{k}", k), key=f"members_{slug}")
+        model_setting = members or list(core.DEFAULT_MODEL)
+    else:
+        model_setting = model_choice
+    st.caption(L["adv_features"])
+    saved_options = core.resolve_options(settings.get("options"))
+    feature_options = {
+        k: st.checkbox(L[f"opt_{k}"], value=saved_options[k], key=f"opt_{k}_{slug}") for k in core.FEATURE_OPTIONS
+    }
+    st.caption(L["model_help"])
+model_spec = core.normalize_model_spec(model_setting if isinstance(model_setting, str) else tuple(model_setting))
+
 # --- Account & email ---
 new_loc_password = ""
 recipients_text = ""
@@ -621,21 +669,22 @@ if uploaded_file is not None:
         st.error(t[error[0]].format(**error[1]))
         st.stop()
     visits = storage.merge_visits(saved_visits, upload_clean)
-    if len(visits) < core.MIN_DAYS:
-        st.error(t["err_too_short"].format(min=core.MIN_DAYS, found=len(visits)))
+    history_days = len(core.history_only(visits))
+    if history_days < core.MIN_DAYS:
+        st.error(t["err_too_short"].format(min=core.MIN_DAYS, found=history_days))
         st.stop()
     # Auto-save into an existing workspace, once per uploaded file (the uploader keeps the
     # file across reruns, so remember which file was already saved).
     upload_id = f"{slug}:{hashlib.sha1(uploaded_file.getvalue()).hexdigest()}"
     if not guest_demo and slug in saved_names:
         if st.session_state.get("autosaved_upload") != upload_id:
-            new_days = len(visits) - (0 if saved_visits is None else len(saved_visits))
+            before = 0 if saved_visits is None else len(core.history_only(saved_visits))
             storage.save_visits(slug, upload_clean)
             storage.sync_to_cloud(slug)
             st.session_state["autosaved_upload"] = upload_id
-            st.toast(L["autosaved"].format(name=loc_name, total=len(visits), new=new_days), icon="✅")
+            st.toast(L["autosaved"].format(name=loc_name, total=history_days, new=history_days - before), icon="✅")
     else:
-        st.toast(t["success_loaded"].format(n=len(visits)), icon="✅")
+        st.toast(t["success_loaded"].format(n=history_days), icon="✅")
         if not guest_demo:
             st.sidebar.caption(L["new_loc_hint"])
 elif saved_visits is not None:
@@ -674,6 +723,8 @@ if not guest_demo:
                 # The prep tab is drawn further down, so read its current values from session state.
                 "prep_items": st.session_state.get(f"prep_items_list_{slug}", settings.get("prep_items")),
                 "prep_buffer": int(st.session_state.get(f"prep_buf_{slug}", settings.get("prep_buffer", 10))),
+                "model": model_setting,
+                "options": feature_options,
                 "password_hash": (
                     storage.hash_password(new_loc_password) if new_loc_password else settings.get("password_hash", "")
                 ),
@@ -688,7 +739,8 @@ if not guest_demo:
 # Training & forecast
 # ============================================================================
 with st.spinner(t["spinner"]):
-    bundle = cached_train(visits, station, holiday_country, saved_events)
+    bundle = cached_train(visits, station, holiday_country, saved_events, model_spec,
+                          tuple(sorted(feature_options.items())))
 if bundle is None:
     st.error(t["err_training"])
     st.stop()
@@ -708,7 +760,7 @@ if st.session_state.get("manual_weather_checkbox", not live_weather_ok):
 else:
     future_weather = auto_weather
 
-base_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS), future_weather)
+base_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS + core.HORIZON), future_weather)
 
 event_active = bool(has_custom_event and event_date is not None)
 if event_active and event_date not in {d.date() for d in future_dates}:

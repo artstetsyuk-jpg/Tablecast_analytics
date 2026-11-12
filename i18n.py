@@ -132,6 +132,20 @@ COUNTRY_SUBDIVISIONS = {
         "Schleswig-Holstein (SH)": "SH",
         "Thüringen (TH)": "TH",
     },
+    # Austria: same public holidays everywhere, but school holidays (semester break, summer start,
+    # patron days) differ by state. Codes are the `holidays` library's '1'..'9'.
+    "AT": {
+        "Auto (From City)": "",
+        "Burgenland": "1",
+        "Kärnten": "2",
+        "Niederösterreich": "3",
+        "Oberösterreich": "4",
+        "Salzburg": "5",
+        "Steiermark": "6",
+        "Tirol": "7",
+        "Vorarlberg": "8",
+        "Wien": "9",
+    },
 }
 
 # Maps Open-Meteo's `admin1` state name to the `holidays` subdivision code
@@ -163,6 +177,9 @@ ADMIN1_TO_SUBDIV = {
     "Hesse": "HE", "Mecklenburg-Vorpommern": "MV", "Lower Saxony": "NI", "North Rhine-Westphalia": "NW",
     "Rhineland-Palatinate": "RP", "Saarland": "SL", "Saxony": "SN", "Saxony-Anhalt": "ST",
     "Schleswig-Holstein": "SH", "Thuringia": "TH",
+    # Austria (geocoder's English names)
+    "Burgenland": "1", "Carinthia": "2", "Lower Austria": "3", "Upper Austria": "4", "Salzburg": "5",
+    "Styria": "6", "Tyrol": "7", "Vorarlberg": "8", "Vienna": "9",
 }
 
 TRANSLATIONS = {
@@ -774,3 +791,95 @@ DAY_SHORT = {
     "German": ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
     "French": ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."],
 }
+
+# ----------------------------------------------------------------------------
+# Model choice & optional forecasting ideas (sidebar "Model")
+# ----------------------------------------------------------------------------
+_MODEL_TEXT = {
+    "English": {
+        "sec_model": "Model & accuracy",
+        "f_model": "Forecasting model",
+        "m_recommended": "Recommended: ExtraTrees + XGBoost + Ridge",
+        "m_classic": "Classic: Random Forest + Gradient Boosting",
+        "m_custom": "Custom blend…",
+        "f_members": "Models to blend (averaged)",
+        "mem_extra_trees": "ExtraTrees", "mem_xgboost": "XGBoost", "mem_ridge": "Ridge (linear)",
+        "mem_random_forest": "Random Forest", "mem_gradient_boosting": "Gradient Boosting",
+        "mem_gradient_boosting_ratio": "Gradient Boosting (relative to normal)", "mem_catboost": "CatBoost",
+        "adv_features": "What the model takes into account",
+        "opt_events": "Local events (learned from your data)",
+        "opt_reservations": "Reservations (if your data has them)",
+        "opt_bridge_days": "Bridge days & long weekends",
+        "opt_school_exact": "Exact school holidays (AT/DE states)",
+        "opt_weather_plus": "More weather (sun, snow, evening rain)",
+        "opt_bonus_pay": "13th/14th salary paydays (AT/DE)",
+        "opt_recency": "Recent months count more",
+        "opt_direct": "Direct 7-day forecast",
+        "model_help": "Changes take effect immediately; the accuracy numbers update for the chosen setup.",
+        "mark_event": "Mark a local event",
+        "f_event_type": "Event type",
+        "f_new_event": "New event type (e.g. home match)",
+        "btn_mark_event": "Mark event day",
+        "event_marked": "Event saved. The model learns its effect from past event days.",
+        "events_csv_hint": "Tip: add columns like event_home_match (0/1) or reservations to your CSV.",
+    },
+    "German": {
+        "sec_model": "Modell & Genauigkeit",
+        "f_model": "Prognosemodell",
+        "m_recommended": "Empfohlen: ExtraTrees + XGBoost + Ridge",
+        "m_classic": "Klassisch: Random Forest + Gradient Boosting",
+        "m_custom": "Eigene Mischung…",
+        "f_members": "Modelle mischen (Durchschnitt)",
+        "mem_extra_trees": "ExtraTrees", "mem_xgboost": "XGBoost", "mem_ridge": "Ridge (linear)",
+        "mem_random_forest": "Random Forest", "mem_gradient_boosting": "Gradient Boosting",
+        "mem_gradient_boosting_ratio": "Gradient Boosting (relativ zum Normalwert)", "mem_catboost": "CatBoost",
+        "adv_features": "Was das Modell berücksichtigt",
+        "opt_events": "Lokale Events (aus Ihren Daten gelernt)",
+        "opt_reservations": "Reservierungen (falls in Ihren Daten)",
+        "opt_bridge_days": "Fenstertage & lange Wochenenden",
+        "opt_school_exact": "Genaue Schulferien (Bundesländer AT/DE)",
+        "opt_weather_plus": "Mehr Wetter (Sonne, Schnee, Regen am Abend)",
+        "opt_bonus_pay": "13./14. Gehalt (AT/DE)",
+        "opt_recency": "Neuere Monate zählen mehr",
+        "opt_direct": "Direkte 7-Tage-Prognose",
+        "model_help": "Änderungen wirken sofort; die Genauigkeitswerte gelten für die gewählte Einstellung.",
+        "mark_event": "Lokales Event eintragen",
+        "f_event_type": "Art des Events",
+        "f_new_event": "Neue Event-Art (z. B. Heimspiel)",
+        "btn_mark_event": "Event-Tag speichern",
+        "event_marked": "Event gespeichert. Das Modell lernt die Wirkung aus vergangenen Event-Tagen.",
+        "events_csv_hint": "Tipp: Spalten wie event_heimspiel (0/1) oder reservations in Ihre CSV aufnehmen.",
+    },
+    "French": {
+        "sec_model": "Modèle & précision",
+        "f_model": "Modèle de prévision",
+        "m_recommended": "Recommandé : ExtraTrees + XGBoost + Ridge",
+        "m_classic": "Classique : Random Forest + Gradient Boosting",
+        "m_custom": "Mélange personnalisé…",
+        "f_members": "Modèles à mélanger (moyenne)",
+        "mem_extra_trees": "ExtraTrees", "mem_xgboost": "XGBoost", "mem_ridge": "Ridge (linéaire)",
+        "mem_random_forest": "Random Forest", "mem_gradient_boosting": "Gradient Boosting",
+        "mem_gradient_boosting_ratio": "Gradient Boosting (relatif à la normale)", "mem_catboost": "CatBoost",
+        "adv_features": "Ce que le modèle prend en compte",
+        "opt_events": "Événements locaux (appris de vos données)",
+        "opt_reservations": "Réservations (si vos données en ont)",
+        "opt_bridge_days": "Ponts & week-ends prolongés",
+        "opt_school_exact": "Vacances scolaires exactes (régions AT/DE)",
+        "opt_weather_plus": "Plus de météo (soleil, neige, pluie le soir)",
+        "opt_bonus_pay": "13e/14e mois (AT/DE)",
+        "opt_recency": "Les mois récents comptent plus",
+        "opt_direct": "Prévision directe sur 7 jours",
+        "model_help": "Les changements s'appliquent tout de suite ; la précision affichée correspond au réglage choisi.",
+        "mark_event": "Marquer un événement local",
+        "f_event_type": "Type d'événement",
+        "f_new_event": "Nouveau type (ex. match à domicile)",
+        "btn_mark_event": "Enregistrer le jour",
+        "event_marked": "Événement enregistré. Le modèle apprend son effet à partir des jours passés.",
+        "events_csv_hint": "Astuce : ajoutez des colonnes comme event_match (0/1) ou reservations à votre CSV.",
+    },
+}
+for _lang, _text in _MODEL_TEXT.items():
+    UI_LABELS[_lang].update(_text)
+UI_LABELS["English"]["f_subdiv"] = "State (holidays & school holidays)"
+UI_LABELS["German"]["f_subdiv"] = "Bundesland (Feiertage & Schulferien)"
+UI_LABELS["French"]["f_subdiv"] = "Région (jours fériés & vacances scolaires)"

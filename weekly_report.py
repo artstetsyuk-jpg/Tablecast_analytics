@@ -22,9 +22,9 @@ def build_location_report(slug, settings, today):
     name = settings.get("name", slug)
 
     visits = storage.load_visits(slug)
-    if visits is None or len(visits) < core.MIN_DAYS:
+    if visits is None or len(core.history_only(visits)) < core.MIN_DAYS:
         raise ValueError(f"needs at least {core.MIN_DAYS} saved days of history")
-    last_date = visits["visit_date"].max()
+    last_date = core.history_only(visits)["visit_date"].max()
     start = max(pd.Timestamp(today), last_date + pd.Timedelta(days=1))
     stale_days = (start - last_date).days - 1
     if stale_days > MAX_STALE_DAYS:
@@ -38,14 +38,17 @@ def build_location_report(slug, settings, today):
     holiday_country = f"{loc_country}-{loc_subdiv}" if loc_subdiv else loc_country
     currency = settings.get("currency") or COUNTRY_CURRENCIES.get(loc_country, "€")
     saved_events = storage.load_events(slug)
-    bundle = core.train_bundle(visits, loc_station, holiday_country, events=saved_events)
+    model = settings.get("model", "recommended")
+    bundle = core.train_bundle(visits, loc_station, holiday_country, events=saved_events,
+                               model_spec=model if isinstance(model, str) else tuple(model),
+                               options=settings.get("options"))
     if bundle is None:
         raise ValueError("not enough usable history to train")
     history = bundle["history"]
 
     gap_to_end = pd.date_range(last_date + pd.Timedelta(days=1), start + pd.Timedelta(days=core.HORIZON - 1), freq="D")
     future_weather, _ = core.fetch_future_weather(loc_station, loc_country, gap_to_end, history)
-    all_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS), future_weather)
+    all_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS + core.HORIZON), future_weather)
     week_preds = all_preds.loc[start:start + pd.Timedelta(days=core.HORIZON - 1)]
 
     lunch_share = int(settings.get("lunch_share", 40))

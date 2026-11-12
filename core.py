@@ -1,6 +1,16 @@
 """Forecasting logic with no Streamlit dependency.
 
 Shared by app.py (the UI) and weekly_report.py (scheduled emails).
+
+Optional extras, each with an on/off switch in `options` (see FEATURE_OPTIONS):
+  events         event_<name> columns in the data (0/1 per day), learned from history
+  reservations   a `reservations` column (booked covers per day), used only if present
+  bridge_days    bridge days ("Fenstertage") and long weekends around public holidays
+  school_exact   real school holidays per state for Germany (built-in) and Austria (school-law rules)
+  weather_plus   max temperature, sunshine hours, snow and evening rain
+  bonus_pay      13th/14th salary paydays (end of June / end of November) in AT and DE
+  recency        recent days weigh more in training (half-life of one year)
+  direct         one model predicts days 1..7 directly instead of feeding day-1 guesses into day 2
 """
 import io
 import json
@@ -8,20 +18,27 @@ import math
 import os
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from functools import lru_cache
 
 import holidays
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import ExtraTreesRegressor
+from dateutil.easter import easter
+from sklearn.ensemble import (ExtraTreesRegressor, HistGradientBoostingRegressor,
+                              RandomForestRegressor)
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import mean_absolute_error
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 from xgboost import XGBRegressor
+
+try:  # optional: only offered in the app when installed
+    from catboost import CatBoostRegressor
+except ImportError:  # pragma: no cover
+    CatBoostRegressor = None
 
 # Hosted containers (e.g. Streamlit Cloud) report many CPU cores but only grant a small CPU
 # quota. Spreading hundreds of tiny one-row predictions over every core then costs ~10x more
@@ -40,8 +57,9 @@ MAX_SPAN_DAYS = 365 * 15
 INTERVAL_LOW = 10        # forecast range = 10th..90th percentile of past errors (80% range)
 INTERVAL_HIGH = 90
 INTERVAL_MIN_SAMPLES = 15
+RECENCY_HALF_LIFE_DAYS = 365
 
-FEATURES = [
+BASE_FEATURES = [
     "day_of_week", "is_weekend", "month", "day_of_month", "is_payday",
     "is_holiday", "is_holiday_tomorrow", "is_school_break",
     "temp", "rain", "rain_weekend_penalty", "is_patio_weather",
@@ -49,6 +67,24 @@ FEATURES = [
     "visitors_same_day_last_week", "post_closure_surge",
     "visitors_7d_max", "visitors_30d_max", "momentum_ratio",
 ]
+FEATURES = BASE_FEATURES  # old name, kept for scripts
+WEATHER_BASE = ["temp", "rain"]
+WEATHER_PLUS = ["temp_max", "sunshine", "snow", "rain_evening"]
+RESERVATION_ALIASES = {"reservations", "reservation", "reserved", "bookings", "reservierungen",
+                       "reserve_visitors"}
+
+# Every optional idea, default on/off. The defaults are what the app uses unless a workspace overrides them.
+FEATURE_OPTIONS = {
+    "events": True, "reservations": True, "bridge_days": True, "school_exact": True,
+    "weather_plus": True, "bonus_pay": True, "recency": True, "direct": True,
+}
+NO_OPTIONS = {k: False for k in FEATURE_OPTIONS}
+
+
+def resolve_options(options=None):
+    out = dict(FEATURE_OPTIONS)
+    out.update({k: bool(v) for k, v in (options or {}).items() if k in FEATURE_OPTIONS})
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -70,7 +106,7 @@ VISITOR_ALIASES = {"visitors", "covers", "guests", "pax", "headcount", "customer
 
 
 def _standardize_pos_columns(raw_df):
-    """Map common POS export column names to 'visit_date' and 'visitors'."""
+    """Map common POS export column names to 'visit_date', 'visitors' and 'reservations'."""
     df = raw_df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
     col_map = {}
@@ -84,7 +120,22 @@ def _standardize_pos_columns(raw_df):
             if col in VISITOR_ALIASES:
                 col_map[col] = "visitors"
                 break
+    if "reservations" not in df.columns:
+        for col in df.columns:
+            if col in RESERVATION_ALIASES:
+                col_map[col] = "reservations"
+                break
     return df.rename(columns=col_map) if col_map else df
+
+
+def extra_columns(df):
+    """Optional known-in-advance inputs present in a visits table."""
+    return [c for c in df.columns if c == "reservations" or str(c).startswith("event_")]
+
+
+def history_only(visits):
+    """Rows with a real guest count (future rows that only carry events/reservations are dropped)."""
+    return visits[visits["visitors"].notna()].reset_index(drop=True)
 
 
 def clean_visits(raw_df, min_days=MIN_DAYS):
@@ -92,6 +143,8 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
 
     Returns (clean_df, notes, error). `notes` is a list of (level, message_key, kwargs);
     `error` is None or (message_key, kwargs). Messages are rendered by the UI (localized).
+    Optional columns `reservations` and `event_*` are kept. Rows AFTER the last guest count that
+    only carry those columns (empty guest count) are kept too: known future events/bookings.
     """
     raw_df = _standardize_pos_columns(raw_df)
     if "visit_date" not in raw_df.columns or "visitors" not in raw_df.columns:
@@ -108,29 +161,39 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
         notes.append(("info", "info_dayfirst", {}))
     parsed = parsed.dt.normalize()
     visitors = pd.to_numeric(raw_df["visitors"], errors="coerce")
+    extras = extra_columns(raw_df)
+    extra_vals = pd.DataFrame({c: pd.to_numeric(raw_df[c], errors="coerce") for c in extras}, index=raw_df.index)
 
     valid = parsed.notna() & visitors.notna() & (visitors >= 0)
     if not valid.any():
         return None, notes, ("err_no_valid_rows", {})
-    dropped = int((~valid).sum())
+    future_known = (parsed.notna() & visitors.isna() & extra_vals.notna().any(axis=1)
+                    & (parsed > parsed[valid].max())) if extras else pd.Series(False, index=raw_df.index)
+    dropped = int((~valid & ~future_known).sum())
     if dropped:
         notes.append(("warning", "warn_dropped", {"n": dropped}))
 
-    clean = pd.DataFrame({"visit_date": parsed[valid], "visitors": visitors[valid].astype(float)})
-    duplicates = int(clean["visit_date"].duplicated().sum())
+    rows = valid | future_known
+    clean = pd.DataFrame({"visit_date": parsed[rows], "visitors": visitors[rows].astype(float)})
+    for c in extras:
+        clean[c] = extra_vals.loc[rows, c].astype(float)
+    duplicates = int(clean.loc[clean["visitors"].notna(), "visit_date"].duplicated().sum())
     if duplicates:
         notes.append(("info", "warn_duplicates", {"n": duplicates}))
-    clean = clean.groupby("visit_date", as_index=False)["visitors"].sum().sort_values("visit_date")
+    agg = {"visitors": lambda s: s.sum(min_count=1)}
+    agg.update({c: "max" for c in extras})
+    clean = clean.groupby("visit_date", as_index=False).agg(agg).sort_values("visit_date")
 
     # Treat explicit 0-visitor days from POS exports as closed days (absent in `visits` -> NaN on calendar)
-    clean = clean[clean["visitors"] > 0].reset_index(drop=True)
-    if clean.empty:
+    clean = clean[clean["visitors"].isna() | (clean["visitors"] > 0)].reset_index(drop=True)
+    hist = history_only(clean)
+    if hist.empty:
         return None, notes, ("err_no_valid_rows", {})
 
-    if (clean["visit_date"].max() - clean["visit_date"].min()).days > MAX_SPAN_DAYS:
+    if (hist["visit_date"].max() - hist["visit_date"].min()).days > MAX_SPAN_DAYS:
         return None, notes, ("err_dates", {})
-    if len(clean) < min_days:
-        return None, notes, ("err_too_short", {"min": min_days, "found": len(clean)})
+    if len(hist) < min_days:
+        return None, notes, ("err_too_short", {"min": min_days, "found": len(hist)})
     return clean, notes, None
 
 
@@ -204,7 +267,8 @@ def resolve_location_coords(location_query, country="FR"):
 
 @lru_cache(maxsize=256)
 def _fetch_open_meteo_cached(lat, lon, start_iso, end_iso, today_iso):
-    """Cached worker for Open-Meteo Archive & Forecast APIs."""
+    """Cached worker for Open-Meteo Archive & Forecast APIs.
+    Columns: temp (daily mean), rain (mm), temp_max, sunshine (hours), snow (cm), rain_evening (mm 17-22h)."""
     start_d = date.fromisoformat(start_iso)
     end_d = date.fromisoformat(end_iso)
     today_d = date.fromisoformat(today_iso)
@@ -221,20 +285,40 @@ def _fetch_open_meteo_cached(lat, lon, start_iso, end_iso, today_iso):
             "longitude": round(lon, 4),
             "start_date": s_date.isoformat(),
             "end_date": e_date.isoformat(),
-            "daily": "temperature_2m_mean,precipitation_sum",
+            "daily": "temperature_2m_mean,precipitation_sum,temperature_2m_max,sunshine_duration,snowfall_sum",
+            "hourly": "precipitation",
             "timezone": "auto",
         }
         url = f"{base_url}?{urllib.parse.urlencode(params)}"
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            daily_data = json.loads(resp.read().decode("utf-8")).get("daily", {})
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        daily_data = payload.get("daily", {})
         times = daily_data.get("time", [])
         if not times:
             return None
-        return pd.DataFrame({
+        n = len(times)
+
+        def col(name, scale=1.0):
+            return pd.to_numeric(pd.Series(daily_data.get(name, [np.nan] * n)), errors="coerce").to_numpy() * scale
+
+        out = pd.DataFrame({
             "date": pd.to_datetime(times).normalize(),
-            "temp": pd.to_numeric(daily_data.get("temperature_2m_mean", [np.nan] * len(times)), errors="coerce"),
-            "rain": pd.to_numeric(daily_data.get("precipitation_sum", [np.nan] * len(times)), errors="coerce"),
+            "temp": col("temperature_2m_mean"),
+            "rain": col("precipitation_sum"),
+            "temp_max": col("temperature_2m_max"),
+            "sunshine": col("sunshine_duration", 1 / 3600),
+            "snow": col("snowfall_sum"),
         })
+        hourly = payload.get("hourly", {})
+        if hourly.get("time"):
+            h = pd.DataFrame({"t": pd.to_datetime(hourly["time"]),
+                              "p": pd.to_numeric(pd.Series(hourly.get("precipitation")), errors="coerce")})
+            evening = h[(h.t.dt.hour >= 17) & (h.t.dt.hour < 22)]
+            per_day = evening.groupby(evening.t.dt.normalize())["p"].sum(min_count=1)
+            out["rain_evening"] = out["date"].map(per_day).to_numpy(dtype=float)
+        else:
+            out["rain_evening"] = np.nan
+        return out
 
     if start_d <= cutoff_d:
         arch_end = min(end_d, cutoff_d)
@@ -263,7 +347,7 @@ def _fetch_open_meteo_range(lat, lon, start_iso, end_iso):
 
 def fetch_history_weather(station, start_iso, end_iso, country="FR"):
     """Daily historical weather from Open-Meteo (used as a model feature).
-    Returns (DataFrame[temp, rain] indexed by date, None) or (None, reason)."""
+    Returns (DataFrame indexed by date, None) or (None, reason)."""
     try:
         lat, lon = resolve_location_coords(station, country)
         out = _fetch_open_meteo_range(lat, lon, start_iso, end_iso)
@@ -277,7 +361,7 @@ def fetch_history_weather(station, start_iso, end_iso, country="FR"):
 def fetch_future_weather(station, country, future_dates, history):
     """Fetch day-by-day weather forecast from Open-Meteo for `future_dates`.
     Falls back to `default_weather(history)` for any missing dates.
-    Returns (DataFrame[temp, rain] indexed by future_dates, live_weather_ok)."""
+    Returns (DataFrame indexed by future_dates, live_weather_ok)."""
     def_temp, def_rain = default_weather(history)
     fallback = pd.DataFrame({"temp": def_temp, "rain": def_rain}, index=future_dates)
     if len(future_dates) == 0:
@@ -293,13 +377,13 @@ def fetch_future_weather(station, country, future_dates, history):
         live_ok = bool(reindexed["temp"].notna().any())
         reindexed["temp"] = reindexed["temp"].fillna(def_temp).round(1)
         reindexed["rain"] = reindexed["rain"].fillna(def_rain).round(1)
-        return reindexed[["temp", "rain"]], live_ok
+        return reindexed, live_ok
     except Exception:
         return fallback, False
 
 
 # ----------------------------------------------------------------------------
-# Features (single source of truth for training AND forecasting)
+# Calendars: public holidays, school holidays, bridge days
 # ----------------------------------------------------------------------------
 def school_break_flags(idx, country="FR"):
     """Rough school-holiday / tourism-season flag (supports both Northern and Southern hemispheres)."""
@@ -341,32 +425,113 @@ def get_holiday_dates(country, calendar_index):
     return pd.DatetimeIndex(pd.to_datetime(list(hol.keys())))
 
 
-def build_features(frame, holiday_dates, country="FR"):
-    """frame: daily-calendar DataFrame with columns visitors (NaN = closed/unknown), temp, rain.
-    Every lag uses only data from BEFORE the row's own day."""
+# Austrian semester break week by state (Schulzeitgesetz): 1st, 2nd or 3rd Monday of February.
+AT_SEMESTER_WEEK = {"9": 1, "3": 1, "1": 2, "2": 2, "5": 2, "7": 2, "8": 2, "4": 3, "6": 3}
+AT_EAST = {"1", "3", "9"}   # Burgenland, Niederösterreich, Wien start summer one week earlier
+# School-free state patron days (month, day): Josef, Florian, Rupert, Volksabstimmung, Martin, Leopold
+AT_PATRON_DAYS = {"2": [(3, 19), (10, 10)], "6": [(3, 19)], "7": [(3, 19)], "8": [(3, 19)], "4": [(5, 4)],
+                  "5": [(9, 24)], "1": [(11, 11)], "3": [(11, 15)], "9": [(11, 15)]}
+
+
+def _days(start, end):
+    return pd.date_range(start, end, freq="D")
+
+
+def austrian_school_holidays(years, state="9"):
+    """Austrian school holidays from the school-law rules (state = holidays subdivision '1'..'9')."""
+    state = state if state in AT_SEMESTER_WEEK else "9"
+    out = []
+    for y in years:
+        out.append(_days(date(y, 1, 1), date(y, 1, 6)))                     # Christmas (end)
+        xmas_start = date(y, 12, 23) if date(y, 12, 23).weekday() == 0 else date(y, 12, 24)
+        out.append(_days(xmas_start, date(y, 12, 31)))                      # Christmas (start)
+        out.append(_days(date(y, 11, 2), date(y, 11, 2)))                   # Allerseelen, school-free
+        for m, d in AT_PATRON_DAYS.get(state, []):
+            out.append(_days(date(y, m, d), date(y, m, d)))
+        first_mon = date(y, 2, 1) + timedelta(days=(7 - date(y, 2, 1).weekday()) % 7)
+        sem = first_mon + timedelta(weeks=AT_SEMESTER_WEEK[state] - 1)
+        out.append(_days(sem - timedelta(days=2), sem + timedelta(days=6)))  # semester break Sat..Sun
+        e = easter(y)
+        out.append(_days(e - timedelta(days=8), e + timedelta(days=1)))      # Sat before Palm Sunday..Easter Mon
+        p = e + timedelta(days=49)
+        out.append(_days(p - timedelta(days=1), p + timedelta(days=1)))      # Pentecost Sat..Mon
+        if y >= 2020:
+            out.append(_days(date(y, 10, 27), date(y, 10, 31)))              # autumn break
+        window = (date(y, 6, 28), date(y, 7, 4)) if state in AT_EAST else (date(y, 7, 5), date(y, 7, 11))
+        start = window[0] + timedelta(days=(5 - window[0].weekday()) % 7)   # first Saturday in the window
+        out.append(_days(start, start + timedelta(days=64)))                # 9 weeks summer
+    return pd.DatetimeIndex(sorted(set(np.concatenate([d.values for d in out])))) if out else pd.DatetimeIndex([])
+
+
+def get_school_dates(country, calendar_index):
+    """Exact school holiday dates when known (DE per state, AT per state), else None (-> rough flags)."""
+    years = list(range(int(calendar_index.year.min()), int(calendar_index.year.max()) + 2))
+    parts = str(country or "").split("-", 1)
+    base, subdiv = parts[0].strip().upper(), (parts[1].strip() if len(parts) > 1 else None)
+    if base == "AT":
+        return austrian_school_holidays(years, subdiv or "9")
+    if base == "DE" and subdiv:
+        try:
+            school = holidays.country_holidays("DE", subdiv=subdiv, years=years, categories=("school",))
+        except Exception:
+            return None
+        if len(school) == 0:
+            return None
+        return pd.DatetimeIndex(pd.to_datetime(list(school.keys())))
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Features (single source of truth for training AND forecasting)
+# ----------------------------------------------------------------------------
+@dataclass
+class FeatureContext:
+    holiday_dates: pd.DatetimeIndex
+    country: str = "FR"
+    options: dict = field(default_factory=lambda: dict(NO_OPTIONS))
+    school_dates: pd.DatetimeIndex = None
+    known: pd.DataFrame = None          # index = date, columns = reservations / event_* (incl. future)
+
+
+def _off_day(idx, holiday_dates):
+    return (idx.dayofweek >= 5) | idx.isin(holiday_dates)
+
+
+def build_features(frame, ctx_or_holidays, country="FR", horizon=1):
+    """frame: daily-calendar DataFrame with columns visitors (NaN = closed/unknown) and weather.
+    Every lag uses only data from at least `horizon` days BEFORE the row's own day."""
+    ctx = ctx_or_holidays if isinstance(ctx_or_holidays, FeatureContext) else FeatureContext(
+        holiday_dates=ctx_or_holidays, country=country)
+    opts = ctx.options
     idx = frame.index
     dow = idx.dayofweek.to_numpy()
     day = idx.day.to_numpy()
+    month = idx.month.to_numpy()
     days_in_month = idx.days_in_month.to_numpy()
     is_weekend = (dow >= 5).astype(int)
     temp = frame["temp"].to_numpy(dtype=float)
     rain = frame["rain"].to_numpy(dtype=float)
+    holiday_dates = ctx.holiday_dates
 
     visitors = frame["visitors"]
-    past = visitors.shift(1)
+    past = visitors.shift(horizon)
     avg7 = past.rolling(7, min_periods=3).mean()
     avg30 = past.rolling(30, min_periods=10).mean()
 
-    # Built in one go (not column by column): this runs hundreds of times per training.
-    return pd.DataFrame({
+    if opts.get("school_exact") and ctx.school_dates is not None:
+        school = idx.isin(ctx.school_dates).astype(int)
+    else:
+        school = school_break_flags(idx, ctx.country)
+
+    cols = {
         "day_of_week": dow,
         "is_weekend": is_weekend,
-        "month": idx.month.to_numpy(),
+        "month": month,
         "day_of_month": day,
         "is_payday": ((day == 1) | (day == 15) | (day >= 25) | (day >= days_in_month - 2)).astype(int),
         "is_holiday": idx.isin(holiday_dates).astype(int),
         "is_holiday_tomorrow": (idx + pd.Timedelta(days=1)).isin(holiday_dates).astype(int),
-        "is_school_break": school_break_flags(idx, country),
+        "is_school_break": school,
         "temp": temp,
         "rain": rain,
         "rain_weekend_penalty": rain * is_weekend,
@@ -379,7 +544,65 @@ def build_features(frame, holiday_dates, country="FR"):
         "visitors_yesterday": past.fillna(avg7).to_numpy(),
         "visitors_same_day_last_week": visitors.shift(7).fillna(avg7).to_numpy(),
         "momentum_ratio": (avg7 / avg30.replace(0, np.nan)).fillna(1.0).clip(0.5, 2.0).to_numpy(),
-    }, index=idx)
+        "horizon": np.full(len(idx), horizon),
+    }
+
+    if opts.get("bridge_days"):
+        one = pd.Timedelta(days=1)
+        off_today = _off_day(idx, holiday_dates)
+        off_prev, off_next = _off_day(idx - one, holiday_dates), _off_day(idx + one, holiday_dates)
+        near_holiday = (idx.isin(holiday_dates) | (idx - one).isin(holiday_dates) | (idx + one).isin(holiday_dates)
+                        | (idx - 2 * one).isin(holiday_dates) | (idx + 2 * one).isin(holiday_dates))
+        cols["is_bridge_day"] = (~off_today & off_prev & off_next).astype(int)
+        cols["is_long_weekend"] = (off_today & near_holiday & ((dow >= 4) | (dow <= 0))).astype(int)
+
+    if opts.get("bonus_pay") and str(ctx.country).split("-")[0].upper() in {"AT", "DE"}:
+        cols["is_bonus_payday"] = ((((month == 6) | (month == 11)) & (day >= 25))
+                                   | (((month == 7) | (month == 12)) & (day <= 5))).astype(int)
+
+    if opts.get("weather_plus"):
+        for c in WEATHER_PLUS:
+            cols[c] = frame[c].to_numpy(dtype=float) if c in frame else np.full(len(idx), np.nan)
+        trailing = frame["temp"].shift(1).rolling(30, min_periods=7).mean()
+        cols["temp_anomaly"] = (frame["temp"] - trailing).to_numpy()
+
+    if ctx.known is not None and (opts.get("events") or opts.get("reservations")):
+        known = ctx.known.reindex(idx)
+        for c in ctx.known.columns:
+            if c.startswith("event_") and opts.get("events"):
+                cols[c] = known[c].fillna(0.0).to_numpy()
+            elif c == "reservations" and opts.get("reservations"):
+                res = known[c].fillna(0.0).to_numpy()
+                cols["reservations"] = res
+                cols["reservations_share"] = res / np.maximum(1.0, np.nan_to_num(avg30.to_numpy(), nan=1.0))
+        if opts.get("events"):
+            ev = [c for c in ctx.known.columns if c.startswith("event_")]
+            if ev:
+                cols["event_any"] = (known[ev].fillna(0.0).to_numpy() > 0).any(axis=1).astype(int)
+
+    # Built in one go (not column by column): this runs hundreds of times per training.
+    return pd.DataFrame(cols, index=idx)
+
+
+def feature_columns(ctx, weather_ok):
+    """Which feature columns a model trains on, given the options and the data available."""
+    opts = ctx.options
+    cols = list(BASE_FEATURES)
+    if opts.get("direct"):
+        cols.append("horizon")
+    if opts.get("bridge_days"):
+        cols += ["is_bridge_day", "is_long_weekend"]
+    if opts.get("bonus_pay") and str(ctx.country).split("-")[0].upper() in {"AT", "DE"}:
+        cols.append("is_bonus_payday")
+    if opts.get("weather_plus") and weather_ok:
+        cols += WEATHER_PLUS + ["temp_anomaly"]
+    if ctx.known is not None:
+        ev = [c for c in ctx.known.columns if c.startswith("event_")]
+        if opts.get("events") and ev:
+            cols += ev + ["event_any"]
+        if opts.get("reservations") and "reservations" in ctx.known.columns:
+            cols += ["reservations", "reservations_share"]
+    return cols
 
 
 def detect_closed_weekdays(visits, calendar_index):
@@ -405,76 +628,157 @@ def fmt_pct(value):
 
 
 # ----------------------------------------------------------------------------
-# Blended model, Validation, Forecast Ranges
+# Models: single models, presets and custom blends
 # ----------------------------------------------------------------------------
+class RatioModel:
+    """Predicts guests relative to the 30-day average (e.g. 1.2x normal), so trees can follow growth."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def fit(self, X, y, sample_weight=None):
+        level = np.maximum(1.0, X["visitors_30d_avg"].to_numpy(dtype=float))
+        self.model.fit(X, np.asarray(y, dtype=float) / level, sample_weight=sample_weight)
+        return self
+
+    def predict(self, X):
+        return self.model.predict(X) * np.maximum(1.0, X["visitors_30d_avg"].to_numpy(dtype=float))
+
+
+MODEL_MEMBERS = ["extra_trees", "xgboost", "ridge", "random_forest", "gradient_boosting",
+                 "gradient_boosting_ratio"] + (["catboost"] if CatBoostRegressor is not None else [])
+MODEL_PRESETS = {
+    "recommended": ("extra_trees", "xgboost", "ridge"),   # benchmarked best for restaurants
+    "classic": ("random_forest", "gradient_boosting_ratio"),  # the original TableCast model
+}
+DEFAULT_MODEL = MODEL_PRESETS["recommended"]
+
+
+def _make_member(key):
+    if key == "extra_trees":
+        return ExtraTreesRegressor(n_estimators=300, min_samples_leaf=2, random_state=42, n_jobs=N_THREADS)
+    if key == "xgboost":
+        return XGBRegressor(n_estimators=500, learning_rate=0.04, max_depth=5, subsample=0.8,
+                            colsample_bytree=0.8, min_child_weight=3, n_jobs=N_THREADS, random_state=42)
+    if key == "ridge":
+        return make_pipeline(StandardScaler(), RidgeCV(alphas=np.logspace(-2, 3, 12)))
+    if key == "random_forest":
+        return RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=N_THREADS)
+    if key == "gradient_boosting":
+        return HistGradientBoostingRegressor(max_iter=100, max_depth=5, random_state=42)
+    if key == "gradient_boosting_ratio":
+        return RatioModel(HistGradientBoostingRegressor(max_iter=100, max_depth=5, random_state=42))
+    if key == "catboost" and CatBoostRegressor is not None:
+        return CatBoostRegressor(iterations=600, depth=6, learning_rate=0.05, random_seed=42,
+                                 verbose=False, thread_count=N_THREADS)
+    raise ValueError(f"unknown model: {key}")
+
+
+def _fit_member(key, X, y, sample_weight=None):
+    model = _make_member(key)
+    if key == "ridge":
+        model.fit(X, y, ridgecv__sample_weight=sample_weight)
+    else:
+        model.fit(X, y, sample_weight=sample_weight)
+    if key == "random_forest":
+        model.set_params(n_jobs=1)
+    return model
+
+
 class BlendedModel:
-    """Equal-weight average of two tree models and one linear model.
+    """Equal-weight average of its members (one member = a single model).
 
-    The trees (ExtraTrees, XGBoost) capture combinations such as "Saturday + sunny + payday";
-    the linear model (Ridge) follows trends smoothly and can go beyond the range seen in training,
-    which trees cannot. They make different mistakes, so the average is more accurate.
-    Benchmarked against the previous RandomForest + HistGradientBoosting model in TableCast's own
-    7-day backtest: better on 10 of 10 restaurants (bakery 9.4% -> 8.5% error)."""
+    Default: two tree models (ExtraTrees, XGBoost) + one linear model (Ridge). The trees capture
+    combinations such as "Saturday + sunny + payday"; the linear model follows trends smoothly.
+    Benchmarked against the original RandomForest + gradient-boosting model in TableCast's own
+    7-day backtest: better on 12 of 12 real restaurants/bakeries."""
 
-    def __init__(self, *models):
+    def __init__(self, *models, keys=()):
         self.models = models
+        self.keys = tuple(keys)
 
     def predict(self, X):
         return np.mean([m.predict(X) for m in self.models], axis=0)
 
 
-def fit_model(X, y):
-    extra = ExtraTreesRegressor(n_estimators=300, min_samples_leaf=2, random_state=42, n_jobs=N_THREADS)
-    boost = XGBRegressor(
-        n_estimators=500, learning_rate=0.04, max_depth=5, subsample=0.8, colsample_bytree=0.8,
-        min_child_weight=3, n_jobs=N_THREADS, random_state=42,
-    )
-    linear = make_pipeline(StandardScaler(), RidgeCV(alphas=np.logspace(-2, 3, 12)))
-    return BlendedModel(extra.fit(X, y), boost.fit(X, y), linear.fit(X, y))
+def normalize_model_spec(spec):
+    if isinstance(spec, str):
+        spec = MODEL_PRESETS.get(spec, (spec,))
+    keys = tuple(k for k in (spec or DEFAULT_MODEL) if k in MODEL_MEMBERS)
+    return keys or DEFAULT_MODEL
+
+
+def fit_model(X, y, model_spec=None, sample_weight=None):
+    keys = normalize_model_spec(model_spec)
+    return BlendedModel(*[_fit_member(k, X, y, sample_weight) for k in keys], keys=keys)
 
 
 fit_forest = fit_model  # old name, kept so older scripts keep working
 
 
+def recency_weights(dates, last_date):
+    age = (pd.Timestamp(last_date) - pd.DatetimeIndex(dates)).days.to_numpy(dtype=float)
+    return np.power(0.5, age / RECENCY_HALF_LIFE_DAYS)
+
+
 @dataclass
 class Forecaster:
     model: object
-    holiday_dates: pd.DatetimeIndex
+    ctx: FeatureContext
     closed_weekdays: frozenset
     medians: pd.Series
-    country: str = "FR"
+    columns: list = field(default_factory=lambda: list(BASE_FEATURES))
+
+    @property
+    def holiday_dates(self):
+        return self.ctx.holiday_dates
+
+    @property
+    def country(self):
+        return self.ctx.country
+
+    @property
+    def direct(self):
+        return bool(self.ctx.options.get("direct"))
 
     def forecast(self, history: pd.DataFrame, future_weather: pd.DataFrame) -> pd.Series:
         return self.forecast_many([(history, future_weather)])[0]
 
     def forecast_many(self, jobs):
-        """Recursive day-by-day forecasts for several (history, future_weather) pairs at once.
+        """Forecasts for several (history, future_weather) pairs at once.
 
-        Each day's prediction feeds the next day's features, so days stay sequential, but the
-        pairs are independent: step k of every pair is predicted in ONE model call. Results are
-        identical to forecasting each pair alone; the backtest just makes 7 model calls instead
-        of ~800 (each call has a fixed cost across 200 trees)."""
+        Recursive mode: each day's prediction feeds the next day's features; step k of every pair is
+        predicted in ONE model call. Direct mode: day k is predicted straight from the history (the
+        model was trained for k days ahead), so nothing is fed back. Either way, results are identical
+        to forecasting each pair alone; the backtest just makes 7 model calls instead of ~800."""
         with threadpool_limits(N_THREADS):
-            frames = [history[["visitors", "temp", "rain"]].copy() for history, _ in jobs]
-            preds = [{} for _ in jobs]
+            frames, preds = [], [{} for _ in jobs]
+            for history, weather in jobs:
+                cols = ["visitors"] + [c for c in history.columns if c != "visitors"]
+                frames.append(history[cols].copy())
             for step in range(max((len(w) for _, w in jobs), default=0)):
                 rows, owners = [], []
                 for i, (_, weather) in enumerate(jobs):
                     if step >= len(weather):
                         continue
                     d, w = weather.index[step], weather.iloc[step]
-                    frames[i].loc[d] = [np.nan, float(w["temp"]), float(w["rain"])]
+                    frame = frames[i]
+                    new_row = {c: (float(w[c]) if c in w.index and pd.notna(w[c]) else np.nan) for c in frame.columns}
+                    new_row["visitors"] = np.nan
+                    frame.loc[d] = [new_row[c] for c in frame.columns]
                     if d.dayofweek in self.closed_weekdays:
                         preds[i][d] = np.nan
                         continue
-                    feats = build_features(frames[i].tail(LOOKBACK_DAYS), self.holiday_dates, self.country)
-                    rows.append(feats[FEATURES].iloc[[-1]].fillna(self.medians))
+                    horizon = step + 1 if self.direct else 1
+                    feats = build_features(frame.tail(LOOKBACK_DAYS + horizon), self.ctx, horizon=horizon)
+                    rows.append(feats[self.columns].iloc[[-1]].fillna(self.medians))
                     owners.append((i, d))
                 if rows:
                     values = self.model.predict(pd.concat(rows))
                     for (i, d), value in zip(owners, values):
                         pred = max(0.0, float(value))
-                        frames[i].loc[d, "visitors"] = pred
+                        if not self.direct:
+                            frames[i].loc[d, "visitors"] = pred
                         preds[i][d] = pred
             return [pd.Series(p, dtype=float) for p in preds]
 
@@ -487,11 +791,12 @@ def validate_seven_day(forecaster, history, features, first_test_date):
     horizon_delta = pd.Timedelta(days=HORIZON)
     last_date = history.index[-1]
     origin = first_test_date - pd.Timedelta(days=1)
+    weather_cols = [c for c in history.columns if c != "visitors"]
     windows, jobs = [], []
     while origin + horizon_delta <= last_date:
         future = pd.date_range(origin + pd.Timedelta(days=1), periods=HORIZON, freq="D")
         windows.append(future)
-        jobs.append((history.loc[:origin].tail(LOOKBACK_DAYS), history.loc[future, ["temp", "rain"]]))
+        jobs.append((history.loc[:origin].tail(LOOKBACK_DAYS + HORIZON), history.loc[future, weather_cols]))
         origin += step
 
     actual_all, model_all, base_all = [], [], []
@@ -533,15 +838,30 @@ def compute_intervals(ratios_by_h):
     return out
 
 
-def train_bundle(visits, station, country, events=None):
-    """Everything expensive, computed once per (data, station, country, events).
+def train_bundle(visits, station, country, events=None, model_spec=None, options=None):
+    """Everything expensive, computed once per (data, station, country, events, model, options).
     Returns None when there is not enough usable history."""
     with threadpool_limits(N_THREADS):
-        return _train_bundle(visits, station, country, events)
+        return _train_bundle(visits, station, country, events, normalize_model_spec(model_spec),
+                             resolve_options(options))
 
 
-def _train_bundle(visits, station, country, events):
-    calendar =pd.date_range(visits["visit_date"].min(), visits["visit_date"].max(), freq="D")
+def _training_set(history, ctx, columns, horizons):
+    """Stacked (X, y, target dates) for the given horizons; rows whose features are incomplete are dropped."""
+    Xs, ys = [], []
+    for h in horizons:
+        feats = build_features(history, ctx, horizon=h)
+        usable = history["visitors"].notna() & feats[columns].notna().all(axis=1)
+        Xs.append(feats.loc[usable, columns])
+        ys.append(history.loc[usable, "visitors"])
+    return pd.concat(Xs), pd.concat(ys)
+
+
+def _train_bundle(visits, station, country, events, model_spec, options):
+    known_cols = extra_columns(visits)
+    known = visits.set_index("visit_date")[known_cols].sort_index() if known_cols else None
+    visits = history_only(visits)
+    calendar = pd.date_range(visits["visit_date"].min(), visits["visit_date"].max(), freq="D")
     raw_visitors = visits.set_index("visit_date")["visitors"].reindex(calendar)
     if events:
         extra_series = pd.Series(
@@ -566,25 +886,39 @@ def _train_bundle(visits, station, country, events):
         rain = weather["rain"].reindex(calendar)
         history["temp"] = temp.fillna(temp.mean() if temp.notna().any() else DEFAULT_TEMP)
         history["rain"] = rain.fillna(0.0)
+        if options.get("weather_plus"):
+            for c in WEATHER_PLUS:
+                series = weather[c].reindex(calendar) if c in weather else pd.Series(np.nan, index=calendar)
+                history[c] = series.fillna(series.mean() if series.notna().any() else 0.0)
     else:
         history["temp"] = DEFAULT_TEMP
         history["rain"] = 0.0
 
     holiday_dates = get_holiday_dates(country, calendar)
+    school_dates = get_school_dates(country, calendar) if options.get("school_exact") else None
+    ctx = FeatureContext(holiday_dates=holiday_dates, country=country, options=options,
+                         school_dates=school_dates, known=known)
+    columns = feature_columns(ctx, weather_ok)
     closed = detect_closed_weekdays(visits, calendar)
-    features = build_features(history, holiday_dates, country)
+    features = build_features(history, ctx)  # day-1 features: charts, next-day error, baseline
 
-    usable = history["visitors"].notna() & features[FEATURES].notna().all(axis=1)
-    X, y = features.loc[usable, FEATURES], history.loc[usable, "visitors"]
-    if len(X) < MIN_TRAIN_ROWS:
+    usable = history["visitors"].notna() & features[columns].notna().all(axis=1)
+    usable_dates = history.index[usable]
+    if len(usable_dates) < MIN_TRAIN_ROWS:
         return None
 
     # 1) Honest validation: train on the first 80%, test on the most recent 20%.
-    n_train = int(len(X) * (1 - TEST_FRACTION))
-    X_train, X_test, y_train, y_test = X.iloc[:n_train], X.iloc[n_train:], y.iloc[:n_train], y.iloc[n_train:]
-    val_model = fit_model(X_train, y_train)
-    val_forecaster = Forecaster(val_model, holiday_dates, closed, X_train.median(), country)
+    cut = usable_dates[int(len(usable_dates) * (1 - TEST_FRACTION))]
+    horizons = range(1, HORIZON + 1) if options.get("direct") else (1,)
+    X_all, y_all = _training_set(history, ctx, columns, horizons)
+    train_mask = X_all.index < cut
+    X_train, y_train = X_all[train_mask], y_all[train_mask]
+    w_train = recency_weights(X_train.index, cut) if options.get("recency") else None
+    val_model = fit_model(X_train, y_train, model_spec, w_train)
+    val_forecaster = Forecaster(val_model, ctx, closed, X_train.median(), columns)
 
+    X_test = features.loc[usable & (history.index >= cut), columns]
+    y_test = history.loc[X_test.index, "visitors"]
     preds = val_model.predict(X_test)
     baseline = X_test["visitors_same_day_last_week"].to_numpy()
     validation = validate_seven_day(val_forecaster, history, features, X_test.index[0])
@@ -596,11 +930,12 @@ def _train_bundle(visits, station, country, events):
     )
 
     # 2) The model used for the planner is refit on ALL the data.
-    final_model = fit_model(X, y)
+    w_all = recency_weights(X_all.index, history.index[-1]) if options.get("recency") else None
+    final_model = fit_model(X_all, y_all, model_spec, w_all)
     dow_means = visits.groupby(visits["visit_date"].dt.dayofweek)["visitors"].mean().reindex(range(7)).fillna(0.0)
 
     return {
-        "forecaster": Forecaster(final_model, holiday_dates, closed, X.median(), country),
+        "forecaster": Forecaster(final_model, ctx, closed, X_all.median(), columns),
         "history": history,
         "closed_weekdays": closed,
         "mean_visitors": float(visits["visitors"].mean()),
@@ -614,6 +949,9 @@ def _train_bundle(visits, station, country, events):
         "dow_means": dow_means,
         "weather_ok": weather_ok,
         "weather_reason": weather_reason,
+        "model": model_spec,
+        "options": options,
+        "features": columns,
     }
 
 
