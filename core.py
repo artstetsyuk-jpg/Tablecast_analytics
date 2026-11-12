@@ -87,8 +87,10 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
 
     notes = []
     dates_raw = raw_df["visit_date"].astype(str).str.strip()
-    if dates_raw.str.match(r"^\d{4}-\d{2}-\d{2}").all():
-        parsed = pd.to_datetime(dates_raw, errors="coerce")
+    # Decide by majority: one junk row must not flip an ISO file to day-first parsing
+    # (which would silently drop every date with a day above 12).
+    if dates_raw.str.match(r"^\d{4}-\d{2}-\d{2}").mean() >= 0.5:
+        parsed = pd.to_datetime(dates_raw, errors="coerce", format="ISO8601")
     else:
         parsed = pd.to_datetime(dates_raw, errors="coerce", dayfirst=True)
         notes.append(("info", "info_dayfirst", {}))
@@ -418,7 +420,6 @@ def fit_forest(X, y):
     return TrendAwareEnsemble(rf, gb)
 
 
-@dataclass
 @dataclass
 class Forecaster:
     model: object

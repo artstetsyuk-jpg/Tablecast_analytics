@@ -1,6 +1,10 @@
-"""Plan formatting and the PDF report (no Streamlit dependency). Email lives in mailer.py."""
+"""Plan formatting, the PDF report and the calendar export (no Streamlit dependency).
+Email lives in mailer.py."""
+import hashlib
 import unicodedata
+from datetime import datetime, timedelta, timezone
 
+import pandas as pd
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
@@ -132,8 +136,6 @@ def build_pdf(title, summary_lines, headers, rows):
         pdf.ln()
     return bytes(pdf.output())
 
-from datetime import datetime, timedelta
-import pandas as pd
 
 def build_ics(plan, location_name: str = "TableCast", currency: str = "€") -> bytes:
     """Generate an iCalendar (.ics) file from the 7-day forecast plan (list of dicts or DataFrame)."""
@@ -144,14 +146,17 @@ def build_ics(plan, location_name: str = "TableCast", currency: str = "€") -> 
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
     ]
-    now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     items = plan.to_dict("records") if isinstance(plan, pd.DataFrame) else list(plan)
 
     for row in items:
         d = pd.Timestamp(row["date"])
         dt_start = d.strftime("%Y%m%d")
         dt_end = (d + timedelta(days=1)).strftime("%Y%m%d")
-        uid = f"tablecast-{dt_start}-{abs(hash(location_name)) % 100000}@tablecast.ai"
+        # Stable across runs (built-in hash() is randomized per process), so re-importing
+        # the calendar updates events instead of duplicating them.
+        loc_id = hashlib.sha1(location_name.encode("utf-8")).hexdigest()[:10]
+        uid = f"tablecast-{dt_start}-{loc_id}@tablecast.ai"
 
         if row.get("is_closed", False):
             summary = f"🔒 {location_name}: Closed"

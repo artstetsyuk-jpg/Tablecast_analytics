@@ -1,7 +1,7 @@
-streamlit
-pandas
-numpy
-scikit-learn
-holidays
-fpdf2
-altair
+streamlit==1.65.0
+pandas==3.0.6
+numpy==2.5.3
+scikit-learn==1.9.1
+holidays==0.106
+fpdf2==2.8.9
+altair==6.3.0
