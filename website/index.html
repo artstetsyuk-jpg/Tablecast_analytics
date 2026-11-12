@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TableCast · Know tomorrow's guests tonight</title>
+  <meta name="description" content="TableCast forecasts your restaurant's guests for the next 7 days, with weather, public holidays and your own events built in, and turns it into staffing, kitchen prep and revenue plans.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="TableCast · Know tomorrow's guests tonight">
+  <meta property="og:description" content="7-day guest forecasts for restaurants, cafés and bakeries, turned into staffing, prep and revenue plans.">
+  <meta name="theme-color" content="#0B0A10">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23C2410C'/%3E%3Ctext x='32' y='45' font-family='Georgia,serif' font-size='38' font-weight='600' fill='white' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <noscript><style>
+    .intro, .hero-title .intro, .reveal, .mask-reveal, .glass-card { opacity: 1 !important; transform: none !important; filter: none !important; clip-path: none !important; }
+    .letterbox { display: none; }
+  </style></noscript>
+  <script>
+    /* Where every "Try the demo" / "Sign in" button points. Change this to your app's address. */
+    window.TABLECAST_APP_URL = "https://YOUR-APP-NAME.streamlit.app";
+  </script>
+</head>
+<body>
+  <a class="skip" href="#how">Skip to content</a>
+
+  <header class="nav" data-nav>
+    <a class="brand" href="#top" aria-label="TableCast home"><span class="brand-mark">T</span><span>TableCast</span></a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#accuracy">Accuracy</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="nav-signin" data-app-link>Sign in</a>
+      <a class="btn btn-small" data-app-link>Try the demo</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- =========================================================== HERO -->
+    <section class="hero" data-hero>
+      <div class="letterbox letterbox-top" aria-hidden="true"></div>
+      <div class="letterbox letterbox-bottom" aria-hidden="true"></div>
+
+      <div class="scene" aria-hidden="true">
+        <div class="layer sky" data-depth="0.04"></div>
+        <div class="layer sun" data-depth="0.08"></div>
+        <canvas class="layer city city-far" data-depth="0.16" data-city="far"></canvas>
+        <div class="layer haze haze-far" data-depth="0.2"></div>
+        <canvas class="layer city city-near" data-depth="0.3" data-city="near"></canvas>
+        <div class="layer haze haze-near" data-depth="0.34"></div>
+
+        <div class="layer cards" data-depth="0.55">
+          <div class="glass-card card-main">
+            <div class="gc-head"><span>Friday</span><span class="gc-date">13 Nov</span></div>
+            <div class="gc-weather">⛅ 14°C · 0.0 mm</div>
+            <div class="gc-big"><span data-count="137">137</span><small>guests</small></div>
+            <div class="gc-range">likely 113 – 165</div>
+            <div class="gc-bars">
+              <i style="--h:.58"></i><i style="--h:.8" class="hot"></i><i style="--h:.95" class="hot"></i><i style="--h:.7"></i><i style="--h:.12" class="off"></i><i style="--h:.42"></i><i style="--h:.5"></i>
+            </div>
+            <span class="gc-tag">Peak night</span>
+          </div>
+          <div class="glass-card card-side">
+            <div class="gc-label">Staff needed</div>
+            <div class="gc-row"><span>Lunch</span><b>4</b></div>
+            <div class="gc-row"><span>Dinner</span><b>6</b></div>
+          </div>
+        </div>
+
+        <div class="layer bokeh" data-depth="0.9" data-bokeh></div>
+        <div class="vignette"></div>
+      </div>
+
+      <div class="hero-copy" data-hero-copy>
+        <p class="eyebrow intro" style="--i:0">Guest forecasts for restaurants, cafés &amp; bakeries</p>
+        <h1 class="hero-title">
+          <span class="line"><span class="intro" style="--i:1">Know tomorrow's</span></span>
+          <span class="line"><span class="intro" style="--i:2">guests <em>tonight.</em></span></span>
+        </h1>
+        <p class="hero-sub intro" style="--i:3">
+          TableCast learns your rhythm from past guest counts, adds the weather, holidays and your bookings,
+          and plans the next 7 days: staff per shift, kitchen prep and revenue.
+        </p>
+        <div class="hero-ctas intro" style="--i:4">
+          <a class="btn" data-app-link>Try the live demo <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+      </div>
+
+      <a class="scroll-cue" href="#ticker" aria-label="Scroll down"><span></span></a>
+    </section>
+
+    <!-- =========================================================== TICKER -->
+    <section class="ticker" id="ticker" aria-label="What TableCast takes into account">
+      <div class="ticker-track">
+        <ul>
+          <li>Live weather</li><li>Public &amp; state holidays</li><li>School breaks</li><li>Paydays</li>
+          <li>Private events</li><li>Regular closing days</li><li>Seasons &amp; trends</li><li>Lunch vs. dinner</li>
+        </ul>
+        <ul aria-hidden="true">
+          <li>Live weather</li><li>Public &amp; state holidays</li><li>School breaks</li><li>Paydays</li>
+          <li>Private events</li><li>Regular closing days</li><li>Seasons &amp; trends</li><li>Lunch vs. dinner</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- =========================================================== HOW IT WORKS -->
+    <section class="story" id="how" data-story data-active="0">
+      <div class="story-sticky">
+        <div class="story-text">
+          <p class="eyebrow">How it works</p>
+          <h2 class="section-title reveal">From last year's numbers<br>to <em>next week's plan.</em></h2>
+          <ol class="story-steps">
+            <li data-step="0">
+              <span class="num">01</span>
+              <div><h3>Drop in your guest counts</h3>
+              <p>Export daily covers from your till as a CSV. Column names and date formats are recognised automatically, and newer uploads simply extend your history.</p></div>
+            </li>
+            <li data-step="1">
+              <span class="num">02</span>
+              <div><h3>TableCast learns your rhythm</h3>
+              <p>Weekdays, seasons, weather, holidays, school breaks, paydays and closing days. Then it tests itself on recent weeks it has never seen.</p></div>
+            </li>
+            <li data-step="2">
+              <span class="num">03</span>
+              <div><h3>Plan the week in a minute</h3>
+              <p>Guests per day with a realistic range, staff per shift, prep quantities and revenue, as a dashboard, PDF, calendar and weekly email.</p></div>
+            </li>
+          </ol>
+        </div>
+
+        <div class="story-screen" aria-hidden="true">
+          <div class="screen">
+            <div class="screen-bar"><i></i><i></i><i></i><span>tablecast · harbor bistro</span></div>
+            <div class="screen-body">
+              <div class="pane pane-csv">
+                <div class="csv-file"><span class="csv-icon">CSV</span> pos_export_2025.csv <em>· 612 days</em></div>
+                <div class="csv-table">
+                  <div class="csv-row csv-head"><span>date</span><span>covers</span></div>
+                  <div class="csv-row" style="--r:0"><span>2025-10-31</span><span>164</span></div>
+                  <div class="csv-row" style="--r:1"><span>2025-11-01</span><span>187</span></div>
+                  <div class="csv-row" style="--r:2"><span>2025-11-02</span><span>132</span></div>
+                  <div class="csv-row" style="--r:3"><span>2025-11-03</span><span class="muted">closed</span></div>
+                  <div class="csv-row" style="--r:4"><span>2025-11-04</span><span>88</span></div>
+                  <div class="csv-row" style="--r:5"><span>2025-11-05</span><span>97</span></div>
+                  <div class="csv-row" style="--r:6"><span>2025-11-06</span><span>104</span></div>
+                </div>
+                <div class="csv-done">✓ History loaded · Mondays detected as closed</div>
+              </div>
+
+              <div class="pane pane-learn">
+                <svg viewBox="0 0 400 220" class="learn-chart" preserveAspectRatio="none">
+                  <path class="grid" d="M0 55H400M0 110H400M0 165H400"/>
+                  <path class="wave wave-a" data-wave="a"/>
+                  <path class="wave wave-b" data-wave="b"/>
+                </svg>
+                <div class="signals">
+                  <span style="--s:0">☀️ Weather</span><span style="--s:1">🏛️ Holidays</span><span style="--s:2">🎒 School breaks</span>
+                  <span style="--s:3">💶 Paydays</span><span style="--s:4">🎉 Events</span><span style="--s:5">🔒 Closures</span>
+                </div>
+                <div class="learn-score">Tested on unseen weeks · <b>beats "same day last week"</b></div>
+              </div>
+
+              <div class="pane pane-plan">
+                <div class="plan-days">
+                  <div class="pd" style="--d:0"><b>Thu</b><span>100</span><i style="--h:.55"></i></div>
+                  <div class="pd hot" style="--d:1"><b>Fri</b><span>137</span><i style="--h:.78"></i></div>
+                  <div class="pd hot" style="--d:2"><b>Sat</b><span>162</span><i style="--h:.92"></i></div>
+                  <div class="pd" style="--d:3"><b>Sun</b><span>120</span><i style="--h:.68"></i></div>
+                  <div class="pd off" style="--d:4"><b>Mon</b><span>–</span><i style="--h:.04"></i></div>
+                  <div class="pd" style="--d:5"><b>Tue</b><span>71</span><i style="--h:.4"></i></div>
+                  <div class="pd" style="--d:6"><b>Wed</b><span>87</span><i style="--h:.49"></i></div>
+                </div>
+                <div class="plan-sums">
+                  <div><small>Guests</small><b>677</b></div>
+                  <div><small>Revenue</small><b>€19.8k</b></div>
+                  <div><small>Peak staff</small><b>7</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="story-progress"><i></i></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================== FEATURES -->
+    <section class="features" id="features">
+      <div class="wrap">
+        <p class="eyebrow">Features</p>
+        <h2 class="section-title reveal">One forecast.<br><em>Every decision of the week.</em></h2>
+
+        <div class="bento">
+          <article class="tile tile-staff mask-reveal">
+            <h3>Staff per shift</h3>
+            <p>Lunch and dinner split, weekday and weekend, turned into servers needed.</p>
+            <div class="staff-viz" aria-hidden="true">
+              <div><span>Lunch</span><div class="people" style="--n:4"></div><b>4</b></div>
+              <div><span>Dinner</span><div class="people" style="--n:6"></div><b>6</b></div>
+            </div>
+          </article>
+
+          <article class="tile tile-prep mask-reveal">
+            <h3>Kitchen prep sheet</h3>
+            <p>Your own items per guest, plus a safety buffer, so you prep enough and waste less.</p>
+            <ul class="prep-list" aria-hidden="true">
+              <li><span>Croissants</span><b>116 pcs</b></li>
+              <li><span>Espresso beans</span><b>2.4 kg</b></li>
+              <li><span>Oat milk</span><b>16.3 L</b></li>
+            </ul>
+          </article>
+
+          <article class="tile tile-rev mask-reveal">
+            <h3>Revenue outlook</h3>
+            <p>Separate lunch and dinner spend, in your currency.</p>
+            <div class="rev-big" aria-hidden="true">€19,767<small>next 7 days</small></div>
+            <svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 38 L28 30 L57 18 L85 12 L114 26 L142 44 L171 33 L200 29"/></svg>
+          </article>
+
+          <article class="tile tile-mail mask-reveal">
+            <h3>In your inbox every Monday</h3>
+            <p>A PDF plan for the team, a calendar file and an automatic weekly email.</p>
+            <div class="mail" aria-hidden="true">
+              <div class="mail-top"><span class="dot"></span>Mon 07:00</div>
+              <b>Weekly forecast · Harbor Bistro</b>
+              <span>677 guests expected · plan attached</span>
+              <div class="mail-files"><i>PDF</i><i>ICS</i><i>CSV</i></div>
+            </div>
+          </article>
+
+          <article class="tile tile-wide mask-reveal">
+            <div>
+              <h3>Knows what moves your covers</h3>
+              <p>Every day shows the main reason behind its number, so the forecast never feels like a black box.</p>
+            </div>
+            <div class="why-tags" aria-hidden="true">
+              <span class="t-accent">🔥 Peak night</span><span class="t-good">☀️ Patio weather</span><span class="t-warn">🌧️ Rainy weekend</span>
+              <span class="t-accent">🏛️ Public holiday</span><span class="t-good">💶 Payday</span><span>🎉 Private event</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================== ACCURACY -->
+    <section class="accuracy" id="accuracy" data-accuracy>
+      <div class="wrap accuracy-grid">
+        <div>
+          <p class="eyebrow">Accuracy</p>
+          <h2 class="section-title reveal">Honest about<br><em>how good it is.</em></h2>
+          <p class="lead reveal">Every model is tested on the most recent weeks it has never seen, 7 days ahead,
+            and compared against the simple guess of "same day last week". You see both numbers, always.</p>
+          <div class="stats">
+            <div class="stat"><b><span data-countup="10">10</span>%</b><small>typical error,<br>7 days ahead</small></div>
+            <div class="stat stat-muted"><b><span data-countup="14">14</span>%</b><small>"same day last<br>week" guess</small></div>
+          </div>
+          <p class="footnote">Measured on a real bakery's 600-day history. Your numbers depend on your data, and the app shows them before you rely on it.</p>
+        </div>
+        <figure class="acc-chart" aria-label="Chart: forecast follows actual guests more closely than last week's numbers">
+          <svg viewBox="0 0 560 300" preserveAspectRatio="none" data-acc-chart>
+            <path class="grid" d="M0 60H560M0 130H560M0 200H560M0 270H560"/>
+            <path class="line-base" data-series="baseline"/>
+            <path class="line-actual" data-series="actual"/>
+            <path class="line-pred" data-series="forecast"/>
+          </svg>
+          <figcaption>
+            <span class="lg lg-actual">Actual guests</span>
+            <span class="lg lg-pred">TableCast forecast</span>
+            <span class="lg lg-base">Same day last week</span>
+            <span class="lg-note">Illustration</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- =========================================================== FINAL CTA -->
+    <section class="finale">
+      <canvas class="finale-city" data-city="finale" aria-hidden="true"></canvas>
+      <div class="finale-glow" aria-hidden="true"></div>
+      <div class="wrap finale-inner">
+        <h2 class="finale-title reveal">Your next week is already<br><em>in your numbers.</em></h2>
+        <p class="reveal">Try it with a demo bistro in seconds, then upload your own CSV. No credit card, no setup.</p>
+        <div class="hero-ctas reveal">
+          <a class="btn" data-app-link>Try the live demo <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" data-app-link>Create your workspace</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <a class="brand" href="#top"><span class="brand-mark">T</span><span>TableCast</span></a>
+      <p>© <span data-year></span> TableCast Labs · Forecasts are estimates, not guarantees.</p>
+      <nav aria-label="Legal"><a href="impressum.html">Impressum</a><a href="privacy.html">Privacy</a></nav>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js" defer></script>
+</body>
+</html>
