@@ -222,8 +222,34 @@ def test_model_menu_and_custom_blend_work(account):
     assert not at.exception
 
 
-def test_accuracy_tab_shows_staffing_and_unusual_days(account):
+def test_accuracy_tab_shows_schedule_outcomes_and_unusual_days(account):
     at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
     assert not at.exception
     labels = [m.label for m in at.metric]
-    assert "Exact staffing (per shift)" in labels and "Within ±1 server" in labels
+    for label in ("Short-staffed shifts", "Overstaffed shifts", "Wages for extra staff", "Typical miss with TableCast"):
+        assert label in labels
+
+
+def test_recipe_upload_fills_the_prep_list(account, monkeypatch):
+    recipe = b"dish;share;ingredient;amount;unit;pack\nBurger;40%;Buns;1;pcs;12\nBurger;40%;Beef;0.2;kg;\n"
+    real_uploader = streamlit.file_uploader
+    monkeypatch.setattr(streamlit, "file_uploader", lambda *a, **k: FakeUpload(recipe)
+                        if str(k.get("key", "")).startswith("prep_upload") else real_uploader(*a, **k))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    items = at.session_state[f"prep_items_list_{account}"]
+    assert [(i["Item"], round(i["Per Guest"], 3)) for i in items] == [("Buns", 0.4), ("Beef", 0.08)]
+    assert items[0]["Pack"] == 12.0 and (items[1]["Pack"] is None or items[1]["Pack"] != items[1]["Pack"])  # empty
+    assert any("Loaded 2 items" in s.value for s in at.success)
+
+
+def test_staff_roles_are_editable_and_saved(account):
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    assert any("Waiters" in str(c) for df in at.dataframe for c in df.value.columns)
+    at.session_state[f"lunch_hours_{account}"] = 4.0
+    at = at.button(key="save_location_button").click().run()
+    assert not at.exception
+    saved = storage.load_settings(account)
+    assert [r["name"] for r in saved["staff_roles"]] == ["Waiters", "Cooks", "Bartenders", "Dishwashers"]
+    assert saved["shift_hours"]["lunch"] == 4.0 and saved["staff_plan_for"] == "expected"

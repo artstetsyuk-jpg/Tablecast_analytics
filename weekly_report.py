@@ -9,7 +9,7 @@ import core
 import mailer
 import reports
 import storage
-from i18n import COUNTRY_CURRENCIES, DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
+from i18n import COUNTRY_CURRENCIES, DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS, UI_LABELS
 
 STALE_NOTE_AFTER_DAYS = 3   # add a warning to the email when the newest data is older than this
 MAX_STALE_DAYS = 21         # refuse to forecast when the newest data is older than this
@@ -62,6 +62,9 @@ def build_location_report(slug, settings, today):
         events=saved_events,
         weekend_lunch_share=weekend_lunch_share,
         dinner_spend=dinner_spend,
+        roles=settings.get("staff_roles") or core.default_staff_roles(UI_LABELS[lang], settings.get("guests_per_server")),
+        shift_hours=settings.get("shift_hours"),
+        plan_for=settings.get("staff_plan_for", "expected"),
     )
     headers, _, pdf_rows = reports.format_plan(
         plan, t, days, months, bundle["intervals"] is not None, currency=currency

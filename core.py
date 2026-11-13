@@ -619,30 +619,134 @@ def manager_baselines(visitors):
     return last_week, four_weeks
 
 
-def servers_needed(guests, dates, guests_per_server, lunch_share, weekend_lunch_share=None):
-    """Servers per shift exactly as the planner computes them: (lunch servers, dinner servers)."""
+# ----------------------------------------------------------------------------
+# Staff per role
+# ----------------------------------------------------------------------------
+SHIFTS = ("lunch", "dinner")
+DEFAULT_SHIFT_HOURS = {"lunch": 5.0, "dinner": 6.0}
+# A person can absorb a little extra: the next person is only added once a shift is more than 15%
+# of one person's load over capacity (31 guests at 15 per waiter = 2 waiters, not 3).
+STAFF_SLACK = 0.15
+# Sensible casual-restaurant defaults; every restaurant edits these (key = translation key).
+# Tuned so a typical casual restaurant lands at ~30% labour cost / revenue.
+DEFAULT_ROLES = [
+    {"key": "role_waiters", "per": 20.0, "min": 1, "wage": 14.0, "shift": "both"},
+    {"key": "role_cooks", "per": 40.0, "min": 1, "wage": 16.0, "shift": "both"},
+    {"key": "role_bartenders", "per": 80.0, "min": 0, "wage": 14.0, "shift": "dinner"},
+    {"key": "role_dishwashers", "per": 120.0, "min": 1, "wage": 13.0, "shift": "both"},
+]
+
+
+def default_staff_roles(labels, waiter_per=None):
+    """DEFAULT_ROLES with names in the user's language; an older saved 'guests per server' carries over."""
+    return [{"name": labels.get(r["key"], r["key"]),
+             "per": float(waiter_per) if waiter_per and r["key"] == "role_waiters" else r["per"],
+             "min": r["min"], "wage": r["wage"], "shift": r["shift"]} for r in DEFAULT_ROLES]
+
+
+def clean_roles(roles):
+    """Validate a role list (from the editor, settings or an upload). Unusable rows are dropped."""
+    out = []
+    for r in roles or []:
+        name = str(r.get("name") or "").strip()
+        try:
+            per = float(r.get("per") or 0)
+            minimum = int(float(r.get("min") or 0))
+            wage = float(r.get("wage") or 0)
+        except (TypeError, ValueError):
+            continue
+        shift = str(r.get("shift") or "both").strip().lower()
+        if not name or per <= 0:
+            continue
+        out.append({"name": name, "per": per, "min": max(0, minimum), "wage": max(0.0, wage),
+                    "shift": shift if shift in ("both",) + SHIFTS else "both"})
+    return out
+
+
+def people_needed(guests, per_person, minimum=0, slack=STAFF_SLACK):
+    """People for one role and one shift: guests / guests-per-person, rounded up only when the shift is
+    clearly over capacity (see STAFF_SLACK), never below the minimum crew of an open shift."""
+    g = np.asarray(guests, dtype=float)
+    n = np.ceil(np.maximum(g / per_person - slack, 0.0))
+    return np.where(g > 0, np.maximum(n, minimum), 0).astype(int)
+
+
+def split_shifts(guests, dates, lunch_share, weekend_lunch_share=None):
+    """Guests per day -> (lunch guests, dinner guests), with a separate weekend lunch share."""
     g = np.maximum(0, np.round(np.asarray(guests, dtype=float))).astype(int)
     weekend = pd.DatetimeIndex(dates).dayofweek >= 5
     wknd = lunch_share if weekend_lunch_share is None else weekend_lunch_share
-    share = np.where(weekend, wknd, lunch_share) / 100.0
-    lunch = np.round(g * share).astype(int)
-    dinner = g - lunch
-    return np.ceil(lunch / guests_per_server).astype(int), np.ceil(dinner / guests_per_server).astype(int)
+    lunch = np.round(g * np.where(weekend, wknd, lunch_share) / 100.0).astype(int)
+    return lunch, g - lunch
 
 
-def staffing_hit_rates(backtest, guests_per_server, lunch_share, weekend_lunch_share=None):
-    """How often the 7-day forecast (and the 'last week' guess) gives the right number of servers per
-    shift - exactly, and within one server. Uses the backtest days the model never saw."""
-    if backtest is None or len(backtest) == 0:
-        return None
-    dates = backtest["date"]
-    need = np.concatenate(servers_needed(backtest["actual"], dates, guests_per_server, lunch_share, weekend_lunch_share))
-    out = {"n_shifts": int(len(need))}
-    for name, col in (("model", "pred"), ("base", "base")):
-        got = np.concatenate(servers_needed(backtest[col], dates, guests_per_server, lunch_share, weekend_lunch_share))
-        out[f"{name}_exact"] = float(np.mean(got == need) * 100)
-        out[f"{name}_within1"] = float(np.mean(np.abs(got - need) <= 1) * 100)
+def shift_staff(lunch_guests, dinner_guests, roles, slack=STAFF_SLACK):
+    """{"lunch": {role: people}, "dinner": {role: people}} for arrays of guests (one entry per day)."""
+    out = {}
+    for shift, guests in (("lunch", lunch_guests), ("dinner", dinner_guests)):
+        out[shift] = {}
+        for r in roles:
+            works = r["shift"] in ("both", shift)
+            people = people_needed(guests, r["per"], r["min"], slack) if works else np.zeros(len(np.atleast_1d(guests)), int)
+            out[shift][r["name"]] = np.atleast_1d(people)
     return out
+
+
+def staffing_outcomes(backtest, roles, lunch_share, weekend_lunch_share=None, shift_hours=None,
+                      intervals=None, plan_for="expected"):
+    """What a schedule written from the forecast would have meant on past days the model never saw.
+
+    The schedule is written on Sunday for Monday..Sunday (Monday is 1 day ahead, Sunday 7), so every
+    test day is counted once. A shift is SHORT if any role had fewer people than the real guests
+    needed, OVER if nobody was short but some role had too many. Compared with copying last week."""
+    roles = clean_roles(roles)
+    if backtest is None or len(backtest) == 0 or not roles:
+        return None
+    bt = backtest[backtest["horizon"] == pd.to_datetime(backtest["date"]).dt.dayofweek + 1]
+    if bt.empty:
+        return None
+    hours = {**DEFAULT_SHIFT_HOURS, **(shift_hours or {})}
+    dates = pd.to_datetime(bt["date"])
+    model = bt["pred"].to_numpy(dtype=float)
+    if plan_for == "busy" and intervals is not None:
+        model = model * np.array([intervals[int(h)][1] for h in bt["horizon"]])
+
+    def staff(guests):
+        return shift_staff(*split_shifts(guests, dates, lunch_share, weekend_lunch_share), roles)
+
+    need = staff(bt["actual"])
+    out = {"days": int(len(bt)), "weeks": len(bt) / 7.0}
+    for name, guesses in (("model", model), ("base", bt["base"].to_numpy(dtype=float))):
+        got = staff(guesses)
+        short = over = 0
+        extra_hours = missing_hours = extra_cost = 0.0
+        for shift in SHIFTS:
+            diff = np.stack([got[shift][r["name"]] - need[shift][r["name"]] for r in roles])
+            is_short = (diff < 0).any(axis=0)
+            short += int(is_short.sum())
+            over += int((~is_short & (diff > 0).any(axis=0)).sum())
+            extra_hours += float(np.clip(diff, 0, None).sum() * hours[shift])
+            missing_hours += float(np.clip(-diff, 0, None).sum() * hours[shift])
+            wages = np.array([r["wage"] for r in roles])[:, None]
+            extra_cost += float((np.clip(diff, 0, None) * wages).sum() * hours[shift])
+        out[name] = {"short": short, "over": over, "extra_hours": extra_hours,
+                     "missing_hours": missing_hours, "extra_cost": extra_cost}
+    out["open_shifts"] = int(sum((np.asarray(v) > 0).sum() for v in split_shifts(bt["actual"], dates, lunch_share,
+                                                                                weekend_lunch_share)))
+    return out
+
+
+def unusual_day_misses(backtest):
+    """Average miss in guests on unusual days (holidays, events, ...): forecast vs 'same day last week'."""
+    if backtest is None or len(backtest) == 0 or "shock" not in backtest:
+        return None
+    sh = backtest[backtest["shock"]]
+    if sh.empty:
+        return None
+    return {"model": float((sh["actual"] - sh["pred"]).abs().mean()),
+            "base": float((sh["actual"] - sh["base"]).abs().mean()),
+            "days": int(sh["date"].nunique()),
+            "share": float(backtest.drop_duplicates("date")["shock"].mean() * 100)}
 
 
 def feature_columns(ctx, weather_ok):
@@ -1049,16 +1153,24 @@ def default_weather(history):
 def build_plan(
     base_preds, intervals, last_date, event_date, event_extra,
     lunch_share, avg_spend, guests_per_server, events=None,
-    weekend_lunch_share=None, dinner_spend=None,
+    weekend_lunch_share=None, dinner_spend=None, roles=None, shift_hours=None, plan_for="expected",
 ):
     """Turn raw model predictions into the planner rows (numbers only, no formatting).
 
     Supports distinct weekday vs. weekend lunch shares and separate lunch vs. dinner check averages.
+    Staff: one entry per role (see DEFAULT_ROLES); without roles, a single server role at
+    guests_per_server (the original behaviour). plan_for="busy" staffs for the top of the range.
     """
     plan = []
     events_map = events or {}
     wknd_share = lunch_share if weekend_lunch_share is None else weekend_lunch_share
     din_spend = avg_spend if dinner_spend is None else dinner_spend
+    roles = clean_roles(roles)
+    slack = STAFF_SLACK
+    if not roles:
+        roles, slack = [{"name": "servers", "per": float(guests_per_server), "min": 0, "wage": 0.0, "shift": "both"}], 0.0
+    hours = {**DEFAULT_SHIFT_HOURS, **(shift_hours or {})}
+    wage = {r["name"]: r["wage"] for r in roles}
 
     for d, base in base_preds.items():
         d_iso = d.strftime("%Y-%m-%d")
@@ -1080,24 +1192,176 @@ def build_plan(
                 low = min(expected, int(round(base * q_lo)) + extra)
                 high = max(expected, int(round(base * q_hi)) + extra)
 
+        staff = {s: {r["name"]: 0 for r in roles} for s in SHIFTS}
         if is_closed or expected == 0:
-            lunch = dinner = lunch_servers = dinner_servers = servers = 0
+            lunch = dinner = 0
             revenue = 0.0
         else:
             active_share = wknd_share if d.dayofweek >= 5 else lunch_share
             lunch = int(round(expected * active_share / 100))
             dinner = expected - lunch
-            lunch_servers = math.ceil(lunch / guests_per_server) if lunch > 0 else 0
-            dinner_servers = math.ceil(dinner / guests_per_server) if dinner > 0 else 0
-            servers = max(1, lunch_servers + dinner_servers)
             revenue = round(lunch * avg_spend + dinner * din_spend, 2)
+            staff_guests = high if plan_for == "busy" and high is not None else expected
+            staff_lunch = int(round(staff_guests * active_share / 100))
+            people = shift_staff(np.array([staff_lunch]), np.array([staff_guests - staff_lunch]), roles, slack)
+            staff = {s: {name: int(v[0]) for name, v in people[s].items()} for s in SHIFTS}
 
+        lunch_staff, dinner_staff = sum(staff["lunch"].values()), sum(staff["dinner"].values())
         plan.append({
             "date": d, "expected": expected, "low": low, "high": high,
             "is_closed": is_closed, "on_event": on_event,
             "lunch": lunch, "dinner": dinner,
-            "lunch_servers": lunch_servers, "dinner_servers": dinner_servers,
-            "servers": servers,
+            "staff": staff,
+            "lunch_servers": lunch_staff, "dinner_servers": dinner_staff,
+            "servers": lunch_staff + dinner_staff,
+            "labour_hours": sum(n * hours[s] for s in SHIFTS for n in staff[s].values()),
+            "labour_cost": round(sum(n * hours[s] * wage[name] for s in SHIFTS for name, n in staff[s].items()), 2),
             "revenue": revenue,
         })
     return plan
+
+
+# ----------------------------------------------------------------------------
+# Kitchen prep: per-guest amounts, recipes, or learned from past usage
+# ----------------------------------------------------------------------------
+PREP_SERVICES = ("all", "lunch", "dinner")
+_ITEM_ALIASES = ("item", "ingredient", "zutat", "artikel", "product", "produkt", "ingrédient", "article")
+_PER_GUEST_ALIASES = ("per guest", "per_guest", "per cover", "per_cover", "pro gast", "pro_gast", "par client", "rate")
+_UNIT_ALIASES = ("unit", "einheit", "unité")
+_PACK_ALIASES = ("pack", "pack size", "pack_size", "packung", "gebinde", "packungsgröße", "conditionnement")
+_SERVICE_ALIASES = ("service", "shift", "schicht")
+_PLAN_ALIASES = ("plan for", "plan_for", "planen für")
+_DISH_ALIASES = ("dish", "gericht", "menu item", "plat", "speise")
+_AMOUNT_ALIASES = ("amount", "menge", "quantity per dish", "qty", "quantité", "per dish", "pro gericht")
+_SHARE_ALIASES = ("share", "anteil", "orders per guest", "% of guests", "popularity", "part")
+_USED_ALIASES = ("used", "usage", "verbrauch", "quantity", "menge verbraucht", "consumed", "consommé")
+_DATE_ALIASES_PREP = ("date", "datum", "day", "tag")
+
+
+def _pick(columns, aliases):
+    for a in aliases:
+        if a in columns:
+            return a
+    return None
+
+
+def _num(series):
+    return pd.to_numeric(series.astype(str).str.replace(",", ".", regex=False).str.strip(), errors="coerce")
+
+
+def parse_prep_file(raw_bytes, visits=None):
+    """Read a manager's own prep file. Three formats are recognised by their columns:
+
+      list    item, per guest, unit [, pack, service, plan for]       amounts per guest, as typed
+      recipe  dish, share, ingredient, amount, unit [, pack]          share = orders per guest (0.3 or 30%)
+      usage   date, item, used, unit [, pack]                         past usage; per-guest amounts are
+                                                                      learned from the guests on those days
+    Returns (items, kind, error). Items use the keys Item / Per Guest / Unit / Pack / Service / Plan For."""
+    try:
+        df = read_csv_bytes(raw_bytes)
+    except Exception as exc:  # noqa: BLE001 - any parse problem is shown to the user
+        return [], None, f"could not read the file ({type(exc).__name__})"
+    cols = list(df.columns)
+    item_c, unit_c, pack_c = _pick(cols, _ITEM_ALIASES), _pick(cols, _UNIT_ALIASES), _pick(cols, _PACK_ALIASES)
+    dish_c, date_c = _pick(cols, _DISH_ALIASES), _pick(cols, _DATE_ALIASES_PREP)
+    if item_c is None:
+        return [], None, "no item / ingredient column"
+
+    def unit_of(frame):
+        return frame[unit_c].astype(str).str.strip() if unit_c else pd.Series("pcs", index=frame.index)
+
+    def pack_of(frame):
+        return _num(frame[pack_c]).fillna(0.0) if pack_c else pd.Series(0.0, index=frame.index)
+
+    if dish_c is not None:  # recipe: per guest = sum over dishes of (orders per guest x amount per dish)
+        share_c, amount_c = _pick(cols, _SHARE_ALIASES), _pick(cols, _AMOUNT_ALIASES)
+        if share_c is None or amount_c is None:
+            return [], "recipe", "a recipe file needs a share (orders per guest) and an amount column"
+        share = _num(df[share_c].astype(str).str.rstrip("%"))
+        share = share.where(share <= 1.0, share / 100.0)  # 30 or 30% -> 0.30
+        frame = pd.DataFrame({"Item": df[item_c].astype(str).str.strip(), "Unit": unit_of(df),
+                              "per": share * _num(df[amount_c]), "Pack": pack_of(df)}).dropna(subset=["per"])
+        grouped = frame.groupby(["Item", "Unit"], sort=False).agg(per=("per", "sum"), Pack=("Pack", "max")).reset_index()
+        kind = "recipe"
+    elif date_c is not None:  # usage log: per guest = total used / total guests on the same days
+        used_c = _pick(cols, _USED_ALIASES)
+        if used_c is None:
+            return [], "usage", "a usage file needs a used / quantity column"
+        if visits is None or len(visits) == 0:
+            return [], "usage", "upload your guest numbers first"
+        guests = visits.set_index(pd.to_datetime(visits["visit_date"]).dt.normalize())["visitors"]
+        frame = pd.DataFrame({"date": pd.to_datetime(df[date_c], errors="coerce", dayfirst=True).dt.normalize(),
+                              "Item": df[item_c].astype(str).str.strip(), "Unit": unit_of(df),
+                              "used": _num(df[used_c]), "Pack": pack_of(df)}).dropna(subset=["date", "used"])
+        frame = frame[frame["date"].isin(guests[guests > 0].index)]
+        if frame.empty:
+            return [], "usage", "none of the dates match days in your guest data"
+        rows = []
+        for (name, unit), g in frame.groupby(["Item", "Unit"], sort=False):
+            days = g["date"].unique()
+            rows.append({"Item": name, "Unit": unit, "per": g["used"].sum() / guests.loc[days].sum(),
+                         "Pack": g["Pack"].max()})
+        grouped = pd.DataFrame(rows)
+        kind = "usage"
+    else:
+        per_c = _pick(cols, _PER_GUEST_ALIASES)
+        if per_c is None:
+            return [], "list", "no per-guest column"
+        grouped = pd.DataFrame({"Item": df[item_c].astype(str).str.strip(), "Unit": unit_of(df),
+                                "per": _num(df[per_c]), "Pack": pack_of(df)}).dropna(subset=["per"])
+        kind = "list"
+
+    service_c, plan_c = _pick(cols, _SERVICE_ALIASES), _pick(cols, _PLAN_ALIASES)
+    items = []
+    for i, r in grouped.reset_index(drop=True).iterrows():
+        if not r["Item"] or r["Item"].lower() == "nan" or r["per"] <= 0:
+            continue
+        item = {"Item": r["Item"], "Per Guest": round(float(r["per"]), 4), "Unit": r["Unit"] or "pcs",
+                "Pack": float(r["Pack"]) if r["Pack"] > 0 else None, "Service": "all", "Plan For": "expected"}
+        if kind == "list":
+            src = df.loc[grouped.index[i]]
+            if service_c and str(src[service_c]).strip().lower() in PREP_SERVICES:
+                item["Service"] = str(src[service_c]).strip().lower()
+            if plan_c and str(src[plan_c]).strip().lower() in ("expected", "busy"):
+                item["Plan For"] = str(src[plan_c]).strip().lower()
+        items.append(item)
+    if not items:
+        return [], kind, "no usable rows"
+    return items, kind, None
+
+
+def prep_quantities(plan, items, buffer_pct=0.0):
+    """Amounts per open day and item, plus week totals.
+
+    guests  expected guests, or the top of the range for items marked "busy" (never run out)
+    service all day, or only the lunch / dinner guests
+    amount  guests x per guest x (1 + buffer) for "expected" items (busy items already have their margin),
+            rounded UP to whole packs when a pack size is given (buns in bags of 12, ...)
+    Returns (rows, totals): rows = [{"date", "closed", "amounts": {item: qty}}], totals = {item: qty}."""
+    rows, totals = [], {}
+    for row in plan:
+        amounts = {}
+        for it in items:
+            name = str(it.get("Item") or "").strip()
+            try:
+                per = float(it.get("Per Guest") or 0)
+            except (TypeError, ValueError):
+                per = 0.0
+            if not name or per <= 0:
+                continue
+            busy = str(it.get("Plan For") or "expected") == "busy"
+            guests = row["high"] if busy and row.get("high") is not None else row["expected"]
+            service = str(it.get("Service") or "all")
+            if service in ("lunch", "dinner") and row["expected"] > 0:
+                guests = guests * row[service] / row["expected"]
+            qty = 0.0 if row["is_closed"] else guests * per * (1.0 if busy else 1.0 + buffer_pct / 100.0)
+            try:
+                pack = float(it.get("Pack") or 0)
+            except (TypeError, ValueError):
+                pack = 0.0
+            if pack > 0 and qty > 0:
+                qty = math.ceil(qty / pack - 1e-9) * pack
+            amounts[name] = qty
+            totals[name] = totals.get(name, 0.0) + qty
+        rows.append({"date": row["date"], "closed": row["is_closed"], "amounts": amounts})
+    return rows, totals

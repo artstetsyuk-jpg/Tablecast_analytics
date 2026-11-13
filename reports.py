@@ -174,11 +174,16 @@ def build_ics(plan, location_name: str = "TableCast", currency: str = "€") -> 
             range_str = f" (Range: {int(low)}–{int(high)})" if low is not None and high is not None else ""
             event_badge = f" (+{extra} Private Event)" if extra > 0 else ""
             summary = f"🍽️ {exp} pax ({servers} Staff){event_badge} — {location_name}"
+            staff = row.get("staff") or {}
+            roles = ", ".join(
+                f"{name} {staff['lunch'][name]}/{staff['dinner'].get(name, 0)}" for name in staff.get("lunch", {})
+            )
             desc = (
                 f"Expected Traffic: {exp} guests{range_str}\\n"
                 f"Shift Split: Lunch {lunch} | Dinner {dinner}\\n"
-                f"Recommended FOH Staff: {servers} servers\\n"
-                f"Projected Revenue: {currency}{rev:,.2f}"
+                f"Staff: {servers} (Lunch {row.get('lunch_servers', 0)} | Dinner {row.get('dinner_servers', 0)})\\n"
+                + (f"Per role (lunch/dinner): {roles}\\n" if roles else "")
+                + f"Projected Revenue: {currency}{rev:,.2f}"
             )
 
         lines.extend([

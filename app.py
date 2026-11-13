@@ -7,6 +7,7 @@ import csv
 import hashlib
 import hmac
 import importlib
+import math
 import os
 import sys
 from datetime import date, timedelta
@@ -553,9 +554,44 @@ with st.sidebar.expander(L["sec_service"]):
         min_value=0.0, value=float(settings.get("dinner_spend", max(avg_spend, 32.0))), step=1.0,
         key=f"dinner_spend_{slug}",
     )
-    guests_per_server = st.number_input(
-        t["guests_per_server"], min_value=1, value=int(settings.get("guests_per_server", 15)), step=1, key=f"gps_{slug}"
-    )
+guests_per_server = int(settings.get("guests_per_server", 15))  # older accounts: becomes the waiters' rate
+
+# --- Staff roles (edited in the Staff tab, needed here already because the plan is built before the tabs) ---
+WORKS_LABELS = {k: L[f"works_{k}"] for k in ("both", "lunch", "dinner")}
+_WORKS_FROM_LABEL = {lab: k for lang in UI_LABELS.values() for k in ("both", "lunch", "dinner")
+                     for lab in (lang[f"works_{k}"], k)}
+roles_base_key, roles_editor_key = f"staff_roles_base_{slug}", f"staff_editor_{slug}"
+if roles_base_key not in st.session_state:
+    st.session_state[roles_base_key] = [
+        {**r, "shift": WORKS_LABELS.get(r.get("shift", "both"), WORKS_LABELS["both"])}
+        for r in (settings.get("staff_roles") or core.default_staff_roles(L, settings.get("guests_per_server")))
+    ]
+
+
+def editor_records(base, key):
+    """The rows of a st.data_editor as they are now (base + the user's pending edits), readable before the
+    editor itself is drawn further down the page."""
+    rows = [dict(r) for r in base]
+    delta = st.session_state.get(key) or {}
+    for i, change in (delta.get("edited_rows") or {}).items():
+        if int(i) < len(rows):
+            rows[int(i)].update(change)
+    deleted = {int(i) for i in delta.get("deleted_rows") or []}
+    return [r for i, r in enumerate(rows) if i not in deleted] + [dict(r) for r in delta.get("added_rows") or []]
+
+
+def current_roles():
+    rows = editor_records(st.session_state[roles_base_key], roles_editor_key)
+    return core.clean_roles([{**r, "shift": _WORKS_FROM_LABEL.get(str(r.get("shift")), "both")} for r in rows])
+
+
+saved_hours = settings.get("shift_hours") or core.DEFAULT_SHIFT_HOURS
+st.session_state.setdefault(f"lunch_hours_{slug}", float(saved_hours.get("lunch", 5.0)))
+st.session_state.setdefault(f"dinner_hours_{slug}", float(saved_hours.get("dinner", 6.0)))
+st.session_state.setdefault(f"staff_plan_for_{slug}", settings.get("staff_plan_for", "expected"))
+shift_hours = {"lunch": float(st.session_state[f"lunch_hours_{slug}"]),
+               "dinner": float(st.session_state[f"dinner_hours_{slug}"])}
+staff_plan_for = st.session_state[f"staff_plan_for_{slug}"]
 
 # --- Events & bookings ---
 saved_events = {} if guest_demo else storage.load_events(slug)
@@ -725,6 +761,9 @@ if not guest_demo:
                 "avg_spend": avg_spend,
                 "dinner_spend": dinner_spend,
                 "guests_per_server": int(guests_per_server),
+                "staff_roles": current_roles(),
+                "shift_hours": shift_hours,
+                "staff_plan_for": staff_plan_for,
                 "recipients": recipients_text,
                 "owner_email": owner_email,
                 # The prep tab is drawn further down, so read its current values from session state.
@@ -781,6 +820,9 @@ plan = core.build_plan(
     events=saved_events,
     weekend_lunch_share=weekend_lunch_share,
     dinner_spend=dinner_spend,
+    roles=current_roles() or None,
+    shift_hours=shift_hours,
+    plan_for=staff_plan_for,
 )
 
 week_total_guests = sum(r["expected"] for r in plan)
@@ -831,8 +873,8 @@ ui.md(ui.kpi_cards([
 # ============================================================================
 # Tabs
 # ============================================================================
-tab_plan, tab_prep, tab_ai, tab_track, tab_export = st.tabs(
-    [L["tab_plan"], L["tab_prep"], L["tab_accuracy"], L["tab_track"], L["tab_export"]]
+tab_plan, tab_staff, tab_prep, tab_ai, tab_track, tab_export = st.tabs(
+    [L["tab_plan"], L["tab_staff"], L["tab_prep"], L["tab_accuracy"], L["tab_track"], L["tab_export"]]
 )
 
 # ----------------------------------------------------------------------------
@@ -931,6 +973,77 @@ with tab_plan:
                 col_b2.slider(t["avg_rain"], 0.0, 50.0, 0.0, key="rain_slider_input")
 
 # ----------------------------------------------------------------------------
+# Staff per role
+# ----------------------------------------------------------------------------
+def money(value):
+    return f"{currency}{value:,.0f}"
+
+
+def signed_money(value):
+    return ("+" if value >= 0 else "-") + money(abs(value))
+
+
+with tab_staff:
+    st.caption(L["staff_caption"])
+    roles_now = current_roles()
+    open_rows = [r for r in plan if not r["is_closed"]]
+    week_hours = sum(r["labour_hours"] for r in plan)
+    week_cost = sum(r["labour_cost"] for r in plan)
+    ui.md(ui.kpi_cards([
+        {"label": L["staff_week_people"], "value": f"{sum(r['servers'] for r in plan):,}",
+         "sub": L["staff_summary"].format(lunch=sum(r["lunch_servers"] for r in plan),
+                                          dinner=sum(r["dinner_servers"] for r in plan))},
+        {"label": L["staff_week_hours"], "value": f"{week_hours:,.0f}", "unit": "h"},
+        {"label": L["staff_week_cost"], "value": money(week_cost)},
+        {"label": L["staff_labour_pct"],
+         "value": f"{week_cost / week_total_rev * 100:.0f}%" if week_total_rev > 0 else "–"},
+    ]))
+
+    if roles_now and open_rows:
+        staff_table = []
+        for row in plan:
+            d = row["date"]
+            entry = {L["col_date"]: f"{DAYS_SHORT[d.dayofweek]} {d.day} {MONTHS[d.month - 1]}",
+                     L["col_guests"]: 0 if row["is_closed"] else row["expected"]}
+            for role in roles_now:
+                name = role["name"]
+                entry[f"{name} ({L['col_lunch']} / {L['col_dinner']})"] = (
+                    "–" if row["is_closed"] else f"{row['staff']['lunch'].get(name, 0)} / {row['staff']['dinner'].get(name, 0)}"
+                )
+            entry[L["col_hours"]] = f"{row['labour_hours']:.0f}"
+            entry[L["col_cost"]] = money(row["labour_cost"])
+            staff_table.append(entry)
+        st.dataframe(pd.DataFrame(staff_table), hide_index=True, width="stretch")
+    st.caption(L["staff_rule_note"])
+
+    with st.expander(L["staff_settings"], expanded=not roles_now):
+        st.segmented_control(
+            L["f_plan_for"], ["expected", "busy"], key=f"staff_plan_for_{slug}",
+            format_func=lambda k: L[f"plan_{k}"], help=L["help_plan_for"],
+        )
+        h1, h2 = st.columns(2)
+        h1.number_input(L["f_lunch_hours"], min_value=0.0, max_value=16.0, step=0.5, key=f"lunch_hours_{slug}")
+        h2.number_input(L["f_dinner_hours"], min_value=0.0, max_value=16.0, step=0.5, key=f"dinner_hours_{slug}")
+        st.data_editor(
+            pd.DataFrame(st.session_state[roles_base_key], columns=["name", "per", "min", "wage", "shift"]),
+            num_rows="dynamic", width="stretch", hide_index=True, key=roles_editor_key,
+            column_config={
+                "name": st.column_config.TextColumn(L["col_role"], required=True),
+                "per": st.column_config.NumberColumn(L["col_per"], min_value=1.0, step=1.0, format="%.0f"),
+                "min": st.column_config.NumberColumn(L["col_min"], min_value=0, step=1, format="%d"),
+                "wage": st.column_config.NumberColumn(L["col_wage"].format(c=currency), min_value=0.0, format="%.2f"),
+                "shift": st.column_config.SelectboxColumn(L["col_works"], options=list(WORKS_LABELS.values())),
+            },
+        )
+        if st.button(L["btn_reset_roles"], key=f"reset_roles_{slug}"):
+            st.session_state[roles_base_key] = [{**r, "shift": WORKS_LABELS[r["shift"]]}
+                                                for r in core.default_staff_roles(L, settings.get("guests_per_server"))]
+            st.session_state.pop(roles_editor_key, None)
+            st.rerun()
+    if not roles_now:
+        st.info(L["staff_empty"])
+
+# ----------------------------------------------------------------------------
 # Kitchen prep (custom ingredients + presets)
 # ----------------------------------------------------------------------------
 with tab_prep:
@@ -939,7 +1052,7 @@ with tab_prep:
     # Preset labels and item names follow the selected language (stored data keeps whatever was saved).
     PRESET_TEMPLATES = {
         L["preset_bistro"]: [
-            {"Item": L["it_buns"], "Per Guest": 0.45, "Unit": "pcs"},
+            {"Item": L["it_buns"], "Per Guest": 0.45, "Unit": "pcs", "Pack": 12},
             {"Item": L["it_meat"], "Per Guest": 0.12, "Unit": "kg"},
             {"Item": L["it_fries"], "Per Guest": 0.15, "Unit": "kg"},
         ],
@@ -955,10 +1068,60 @@ with tab_prep:
         ],
     }
     UNITS = ["pcs", "kg", "g", "L", "ml", "lb", "oz", "portions"]
+    SVC_LABELS = {k: L[f"svc_{k}"] for k in core.PREP_SERVICES}
+    PLAN_LABELS = {"expected": L["plan_item_expected"], "busy": L["plan_item_busy"]}
+    _svc_from = {lab: k for lang in UI_LABELS.values() for k in core.PREP_SERVICES for lab in (lang[f"svc_{k}"], k)}
+    _plan_from = {lab: k for lang in UI_LABELS.values() for k in ("expected", "busy")
+                  for lab in (lang[f"plan_item_{k}"], k)}
+
+    def for_editor(item):
+        """Stored/uploaded item -> editor row (service and plan shown in the user's language)."""
+        return {"Item": item.get("Item", ""), "Per Guest": item.get("Per Guest"), "Unit": item.get("Unit") or "pcs",
+                "Pack": item.get("Pack"),
+                "Service": SVC_LABELS[_svc_from.get(str(item.get("Service") or "all"), "all")],
+                "Plan For": PLAN_LABELS[_plan_from.get(str(item.get("Plan For") or "expected"), "expected")]}
 
     state_key = f"prep_items_list_{slug}"
     if state_key not in st.session_state:
-        st.session_state[state_key] = settings.get("prep_items") or PRESET_TEMPLATES[L["preset_bistro"]]
+        st.session_state[state_key] = [
+            for_editor(i) for i in (settings.get("prep_items") or PRESET_TEMPLATES[L["preset_bistro"]])
+        ]
+
+    # --- the manager's own file: item list, recipes, or past usage ---
+    upload = st.file_uploader(L["prep_upload"], type=["csv", "txt"], key=f"prep_upload_{slug}",
+                              help=L["prep_upload_help"])
+    msg_key, seen_key = f"prep_upload_msg_{slug}", f"prep_upload_seen_{slug}"
+    if upload is not None:
+        raw = upload.getvalue()
+        digest = hashlib.sha1(raw).hexdigest()
+        if st.session_state.get(seen_key) != digest:  # only once per file, so later edits are kept
+            st.session_state[seen_key] = digest
+            items, kind, err = core.parse_prep_file(raw, visits=visits)
+            if err:
+                st.session_state[msg_key] = ("error", L["prep_upload_err"].format(err=err))
+            else:
+                st.session_state[state_key] = [for_editor(i) for i in items]
+                st.session_state.pop(f"prep_editor_{slug}", None)
+                st.session_state[msg_key] = ("success", L["prep_upload_ok"].format(n=len(items), kind=L[f"prep_kind_{kind}"]))
+                st.rerun()
+    if st.session_state.get(msg_key):
+        kind_msg, text_msg = st.session_state[msg_key]
+        (st.error if kind_msg == "error" else st.success)(text_msg)
+
+    tpl = st.columns([1.2, 1, 1, 1], vertical_alignment="center")
+    tpl[0].caption(L["prep_templates"])
+    templates = {
+        "list": "item;per guest;unit;pack;service\nBurger buns;0.45;pcs;12;all\nBeef patties;0.45;pcs;20;all\n"
+                "Fries;0.15;kg;2.5;all\nSteak;0.08;kg;;dinner\n",
+        "recipe": "dish;share;ingredient;amount;unit;pack\nBurger;35%;Burger buns;1;pcs;12\nBurger;35%;Beef;0.18;kg;\n"
+                  "Burger;35%;Fries;0.15;kg;2.5\nSchnitzel;25%;Veal;0.2;kg;\nSchnitzel;25%;Potato salad;0.2;kg;\n",
+        "usage": "date;item;used;unit;pack\n2026-11-02;Burger buns;48;pcs;12\n2026-11-03;Burger buns;61;pcs;12\n"
+                 "2026-11-02;Beef;9.5;kg;\n2026-11-03;Beef;11.2;kg;\n",
+    }
+    for col, (kind_t, body) in zip(tpl[1:], templates.items()):
+        col.download_button(L[f"tpl_{kind_t}"], body.encode("utf-8-sig"), file_name=f"tablecast_prep_{kind_t}.csv",
+                            mime="text/csv", key=f"tpl_{kind_t}_{slug}", width="stretch",
+                            icon=":material/download:")
 
     with st.expander(L["prep_add"]):
         add_c1, add_c2, add_c3, add_c4 = st.columns([2.2, 1.2, 1, 1.2], vertical_alignment="bottom")
@@ -967,15 +1130,15 @@ with tab_prep:
         new_item_unit = add_c3.selectbox(L["f_unit"], UNITS, key=f"new_ing_unit_{slug}")
         if add_c4.button(L["btn_add"], key=f"add_ing_btn_{slug}", type="primary", width="stretch"):
             if new_item_name.strip():
-                st.session_state[state_key].append(
+                st.session_state[state_key].append(for_editor(
                     {"Item": new_item_name.strip(), "Per Guest": float(new_item_rate), "Unit": new_item_unit}
-                )
+                ))
                 st.rerun()
 
         preset_cols = st.columns(4)
         for idx_p, (preset_label, preset_rows) in enumerate(PRESET_TEMPLATES.items()):
             if preset_cols[idx_p].button(preset_label, key=f"pre_{idx_p}_{slug}", width="stretch"):
-                st.session_state[state_key] = [dict(r) for r in preset_rows]
+                st.session_state[state_key] = [for_editor(r) for r in preset_rows]
                 st.rerun()
         if preset_cols[3].button(L["btn_clear_list"], key=f"clear_ing_{slug}", width="stretch"):
             st.session_state[state_key] = []
@@ -984,48 +1147,63 @@ with tab_prep:
     col_p1, col_p2 = st.columns([3, 1])
     with col_p2:
         safety_buffer = st.slider(
-            L["f_buffer"], 0, 30, int(settings.get("prep_buffer", 10)), help=L["help_buffer"],
+            L["f_buffer"], 0, 30, int(settings.get("prep_buffer", 10)), help=L["help_buffer2"],
             key=f"prep_buf_{slug}",
         )
     with col_p1:
+        prep_input = pd.DataFrame(st.session_state[state_key] or [for_editor({"Per Guest": 0.0})],
+                                  columns=["Item", "Per Guest", "Unit", "Pack", "Service", "Plan For"])
+        for num_col in ("Per Guest", "Pack"):  # empty pack sizes stay blank instead of showing "None"
+            prep_input[num_col] = pd.to_numeric(prep_input[num_col], errors="coerce")
         prep_config_df = st.data_editor(
-            pd.DataFrame(st.session_state[state_key] or [{"Item": "", "Per Guest": 0.0, "Unit": "pcs"}]),
+            prep_input,
             num_rows="dynamic",
             width="stretch",
             column_config={
                 "Item": st.column_config.TextColumn(L["f_ingredient"], required=True),
-                "Per Guest": st.column_config.NumberColumn(L["f_per_guest"], min_value=0.0, format="%.2f"),
-                "Unit": st.column_config.SelectboxColumn(L["f_unit"], options=UNITS),
+                "Per Guest": st.column_config.NumberColumn(L["f_per_guest"], min_value=0.0, format="%.3f"),
+                "Unit": st.column_config.SelectboxColumn(L["f_unit"], options=sorted(
+                    set(UNITS) | {str(r.get("Unit")) for r in st.session_state[state_key] if r.get("Unit")})),
+                "Pack": st.column_config.NumberColumn(L["f_pack"], min_value=0.0, help=L["help_pack"]),
+                "Service": st.column_config.SelectboxColumn(L["f_service"], options=list(SVC_LABELS.values())),
+                "Plan For": st.column_config.SelectboxColumn(L["f_plan_item"], options=list(PLAN_LABELS.values())),
             },
             key=f"prep_editor_{slug}",
         )
         st.session_state[state_key] = prep_config_df.to_dict("records")
 
-    valid_items = [
-        r for _, r in prep_config_df.iterrows()
-        if str(r.get("Item", "")).strip() and pd.notna(r.get("Per Guest"))
+    prep_items_now = [
+        {**r, "Service": _svc_from.get(str(r.get("Service")), "all"),
+         "Plan For": _plan_from.get(str(r.get("Plan For")), "expected"),
+         "Pack": r.get("Pack") if pd.notna(r.get("Pack")) else None}
+        for r in st.session_state[state_key]
+        if str(r.get("Item") or "").strip() and pd.notna(r.get("Per Guest"))
     ]
-    if valid_items:
+    prep_rows, prep_totals = core.prep_quantities(plan, prep_items_now, safety_buffer)
+
+    def fmt_qty(qty, unit):
+        return f"{qty:,.1f}" if unit in {"kg", "L", "lb"} else f"{math.ceil(qty - 1e-9):,}"
+
+    if prep_totals:
+        units = {str(i["Item"]).strip(): str(i.get("Unit") or "pcs") for i in prep_items_now}
         prep_schedule = []
-        for row in plan:
+        for prow, row in zip(prep_rows, plan):
             d = row["date"]
-            day_entry = {
-                L["col_date"]: f"{DAYS_SHORT[d.dayofweek]} {d.day} {MONTHS[d.month - 1]}",
-                L["col_guests"]: 0 if row["is_closed"] else row["expected"],
-            }
-            for item_row in valid_items:
-                item_name = str(item_row["Item"]).strip()
-                rate = float(item_row["Per Guest"] or 0.0)
-                unit = str(item_row.get("Unit") or "pcs").strip()
-                if row["is_closed"]:
-                    day_entry[f"{item_name} ({unit})"] = t["closed"]
-                else:
-                    raw_needed = row["expected"] * rate * (1.0 + safety_buffer / 100.0)
-                    day_entry[f"{item_name} ({unit})"] = (
-                        f"{raw_needed:.1f}" if unit in {"kg", "L", "lb"} else f"{int(np.ceil(raw_needed))}"
-                    )
-            prep_schedule.append(day_entry)
+            entry = {L["col_date"]: f"{DAYS_SHORT[d.dayofweek]} {d.day} {MONTHS[d.month - 1]}",
+                     L["col_guests"]: 0 if row["is_closed"] else row["expected"]}
+            for name, qty in prow["amounts"].items():
+                entry[f"{name} ({units[name]})"] = t["closed"] if prow["closed"] else fmt_qty(qty, units[name])
+            prep_schedule.append(entry)
         st.dataframe(pd.DataFrame(prep_schedule), hide_index=True, width="stretch")
+
+        st.markdown(f"**{L['prep_order_title']}**")
+        packs = {str(i["Item"]).strip(): i.get("Pack") for i in prep_items_now}
+        st.dataframe(pd.DataFrame([
+            {L["f_ingredient"]: name, L["col_week_total"]: fmt_qty(total, units[name]), L["f_unit"]: units[name],
+             L["f_pack"]: (f"{math.ceil(total / packs[name] - 1e-9)} × {packs[name]:g}" if packs.get(name) else "")}
+            for name, total in prep_totals.items()
+        ]), hide_index=True, width="stretch")
+        st.caption(L["prep_order_caption"])
     else:
         st.info(L["prep_empty"])
 
@@ -1040,24 +1218,29 @@ with tab_ai:
         st.warning(ui.plain(t["verdict_worse"]))
     st.caption(baseline_text)
 
-    # "The other side": what the forecast means for a manager, on days it never saw.
-    staffing = core.staffing_hit_rates(bundle.get("backtest"), int(guests_per_server), lunch_share, weekend_lunch_share)
-    if staffing:
+    # What the forecast would have meant for a manager's schedule, on past weeks it never saw.
+    outcome = core.staffing_outcomes(bundle.get("backtest"), current_roles(), lunch_share, weekend_lunch_share,
+                                     shift_hours, bundle["intervals"], staff_plan_for)
+    if outcome:
         st.subheader(L["acc_staff_title"])
-        s1, s2 = st.columns(2)
-        s1.metric(L["acc_staff_exact"], f"{staffing['model_exact']:.0f}%",
-                  f"{staffing['model_exact'] - staffing['base_exact']:+.0f} {L['acc_pts_vs_lastweek']}")
-        s2.metric(L["acc_staff_within1"], f"{staffing['model_within1']:.0f}%",
-                  f"{staffing['model_within1'] - staffing['base_within1']:+.0f} {L['acc_pts_vs_lastweek']}")
-        st.caption(L["acc_staff_caption"].format(n=staffing["n_shifts"], gps=int(guests_per_server),
-                                                 base_exact=staffing["base_exact"], base_within1=staffing["base_within1"]))
-    if np.isfinite(bundle.get("shock_wape7", np.nan)):
+        st.caption(L["acc_staff_intro"].format(weeks=outcome["weeks"]))
+        mod, base = outcome["model"], outcome["base"]
+        s1, s2, s3 = st.columns(3)
+        s1.metric(L["acc_short"], f"{mod['short']:,}", L["acc_vs_lastweek"].format(d=f"{mod['short'] - base['short']:+,}"),
+                  delta_color="inverse")
+        s2.metric(L["acc_over"], f"{mod['over']:,}", L["acc_vs_lastweek"].format(d=f"{mod['over'] - base['over']:+,}"),
+                  delta_color="inverse")
+        s3.metric(L["acc_extra_cost"], money(mod["extra_cost"]),
+                  L["acc_vs_lastweek"].format(d=signed_money(mod["extra_cost"] - base["extra_cost"])), delta_color="inverse")
+        st.caption(L["acc_staff_caption"].format(shifts=f"{outcome['open_shifts']:,}", b_short=f"{base['short']:,}",
+                                                 b_over=f"{base['over']:,}", b_cost=money(base["extra_cost"])))
+    misses = core.unusual_day_misses(bundle.get("backtest"))
+    if misses:
         st.subheader(L["acc_shock_title"])
-        k1, k2, k3 = st.columns(3)
-        k1.metric(L["acc_shock_model"], core.fmt_pct(bundle["shock_wape7"]))
-        k2.metric(L["acc_shock_base"], core.fmt_pct(bundle["base_shock_wape7"]))
-        k3.metric(L["acc_base4"], core.fmt_pct(bundle["base4_wape7"]))
-        st.caption(L["acc_shock_caption"].format(share=bundle["shock_share"]))
+        k1, k2 = st.columns(2)
+        k1.metric(L["acc_shock_model"], L["acc_guests"].format(n=misses["model"]))
+        k2.metric(L["acc_shock_base"], L["acc_guests"].format(n=misses["base"]))
+        st.caption(L["acc_shock_caption"].format(days=misses["days"], share=misses["share"]))
 
     st.subheader(t["main_chart_header"])
     backtest = (

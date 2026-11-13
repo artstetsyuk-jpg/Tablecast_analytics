@@ -232,18 +232,94 @@ def test_direct_and_recursive_modes_both_produce_seven_days():
 
 
 # ---------------------------------------------------------------- manager-facing metrics
-def test_staffing_hit_rates_match_the_planner():
-    dates = pd.to_datetime(["2025-03-03", "2025-03-08"])  # Monday, Saturday
-    bt = pd.DataFrame({"date": dates, "actual": [100.0, 150.0], "pred": [100.0, 120.0], "base": [60.0, 150.0]})
-    rates = core.staffing_hit_rates(bt, guests_per_server=15, lunch_share=40, weekend_lunch_share=40)
-    # actual: Mon 40/60 -> 3+4 servers; Sat 60/90 -> 4+6. pred Sat 48/72 -> 4+5. base Mon 24/36 -> 2+3
-    assert rates["n_shifts"] == 4
-    assert rates["model_exact"] == 75.0 and rates["model_within1"] == 100.0
-    assert rates["base_exact"] == 50.0 and rates["base_within1"] == 100.0
-    lunch, dinner = core.servers_needed([100], pd.to_datetime(["2025-03-03"]), 15, 40)
-    plan = core.build_plan(pd.Series([100.0], index=pd.to_datetime(["2025-03-03"])), None,
-                           pd.Timestamp("2025-03-02"), None, 0, 40, 25.0, 15)
-    assert (lunch[0], dinner[0]) == (plan[0]["lunch_servers"], plan[0]["dinner_servers"])
+ROLES = [{"name": "Waiters", "per": 15, "min": 1, "wage": 14.0, "shift": "both"},
+         {"name": "Cooks", "per": 25, "min": 1, "wage": 16.0, "shift": "both"},
+         {"name": "Bar", "per": 45, "min": 0, "wage": 14.0, "shift": "dinner"}]
+
+
+def test_people_needed_has_a_minimum_crew_and_some_slack():
+    assert core.people_needed([0, 3, 15, 16, 17, 18, 31], 15, minimum=1).tolist() == [0, 1, 1, 1, 1, 2, 2]
+    # 16/15 = 1.07 (within 15% of one person) -> 1; 18/15 = 1.2 -> 2; 31/15 = 2.07 -> 2
+
+
+def test_build_plan_staffs_every_role_and_costs_the_labour():
+    preds = pd.Series([100.0], index=pd.to_datetime(["2025-03-03"]))  # Monday: 40 lunch / 60 dinner
+    plan = core.build_plan(preds, None, pd.Timestamp("2025-03-02"), None, 0, 40, 25.0, 15, roles=ROLES,
+                           shift_hours={"lunch": 5, "dinner": 6})
+    row = plan[0]
+    assert row["staff"]["lunch"] == {"Waiters": 3, "Cooks": 2, "Bar": 0}
+    assert row["staff"]["dinner"] == {"Waiters": 4, "Cooks": 3, "Bar": 2}
+    assert (row["lunch_servers"], row["dinner_servers"], row["servers"]) == (5, 9, 14)
+    assert row["labour_hours"] == 5 * 5 + 9 * 6
+    assert row["labour_cost"] == 3 * 5 * 14 + 2 * 5 * 16 + 4 * 6 * 14 + 3 * 6 * 16 + 2 * 6 * 14
+
+
+def test_busy_planning_staffs_for_the_top_of_the_range():
+    preds = pd.Series([100.0], index=pd.to_datetime(["2025-03-03"]))
+    intervals = {h: (0.8, 1.3) for h in range(1, 8)}
+    normal = core.build_plan(preds, intervals, pd.Timestamp("2025-03-02"), None, 0, 40, 25.0, 15, roles=ROLES)[0]
+    busy = core.build_plan(preds, intervals, pd.Timestamp("2025-03-02"), None, 0, 40, 25.0, 15, roles=ROLES,
+                           plan_for="busy")[0]
+    assert busy["expected"] == normal["expected"] and busy["revenue"] == normal["revenue"]
+    assert busy["servers"] > normal["servers"]
+
+
+def test_staffing_outcomes_count_short_and_overstaffed_shifts():
+    # Sunday-written schedule: Monday is 1 day ahead, Saturday 6. Only those rows count.
+    bt = pd.DataFrame({
+        "date": pd.to_datetime(["2025-03-03", "2025-03-03", "2025-03-08"]),
+        "horizon": [1, 2, 6],
+        "actual": [100.0, 100.0, 150.0], "pred": [100.0, 10.0, 120.0], "base": [60.0, 60.0, 150.0],
+    })
+    roles = [{"name": "Waiters", "per": 15, "min": 1, "wage": 10.0, "shift": "both"}]
+    out = core.staffing_outcomes(bt, roles, 40, 40, shift_hours={"lunch": 5, "dinner": 6})
+    assert out["days"] == 2 and out["open_shifts"] == 4
+    # needed Mon 40/60 -> 3/4, Sat 60/90 -> 4/6. Model Sat 48/72 -> 4/5: Saturday dinner one short.
+    assert (out["model"]["short"], out["model"]["over"]) == (1, 0)
+    # last week Mon 24/36 -> 2/3: both Monday shifts one short. Saturday exact.
+    assert (out["base"]["short"], out["base"]["over"]) == (2, 0) and out["base"]["missing_hours"] == 5 + 6
+    over = core.staffing_outcomes(bt.assign(pred=[200.0, 0, 150.0]), roles, 40, 40, shift_hours={"lunch": 5, "dinner": 6})
+    # Mon 80/120 -> 6/8 vs 3/4: over by 3 (lunch) and 4 (dinner)
+    assert over["model"]["over"] == 2 and over["model"]["extra_hours"] == 3 * 5 + 4 * 6
+    assert over["model"]["extra_cost"] == over["model"]["extra_hours"] * 10.0
+
+
+def test_prep_quantities_use_service_packs_and_busy_days():
+    preds = pd.Series([100.0], index=pd.to_datetime(["2025-03-03"]))
+    plan = core.build_plan(preds, {h: (0.8, 1.3) for h in range(1, 8)}, pd.Timestamp("2025-03-02"),
+                           None, 0, 40, 25.0, 15)  # 40 lunch / 60 dinner, high = 130
+    items = [{"Item": "Buns", "Per Guest": 0.5, "Unit": "pcs", "Pack": 12},
+             {"Item": "Steak", "Per Guest": 0.2, "Unit": "kg", "Service": "dinner"},
+             {"Item": "Bread", "Per Guest": 0.1, "Unit": "kg", "Plan For": "busy"}]
+    rows, totals = core.prep_quantities(plan, items, buffer_pct=10)
+    amounts = rows[0]["amounts"]
+    assert amounts["Buns"] == 60          # 100 x 0.5 x 1.1 = 55 -> 5 bags of 12
+    assert abs(amounts["Steak"] - 60 * 0.2 * 1.1) < 1e-9
+    assert abs(amounts["Bread"] - 130 * 0.1) < 1e-9   # busy: top of the range, no extra buffer
+    assert totals["Buns"] == 60
+
+
+def test_prep_file_formats():
+    lst = "Zutat;Pro Gast;Einheit;Packung\nBrötchen;0,45;pcs;12\nFleisch;0,12;kg;\n".encode("utf-8")
+    items, kind, err = core.parse_prep_file(lst)
+    assert err is None and kind == "list"
+    assert items[0] == {"Item": "Brötchen", "Per Guest": 0.45, "Unit": "pcs", "Pack": 12.0,
+                        "Service": "all", "Plan For": "expected"}
+    assert items[1]["Pack"] is None
+
+    recipe = (b"dish,share,ingredient,amount,unit\nBurger,30%,Buns,1,pcs\nBurger,30%,Beef,0.18,kg\n"
+              b"Hot dog,0.1,Buns,1,pcs\n")
+    items, kind, err = core.parse_prep_file(recipe)
+    per = {i["Item"]: i["Per Guest"] for i in items}
+    assert kind == "recipe" and abs(per["Buns"] - 0.4) < 1e-9 and abs(per["Beef"] - 0.054) < 1e-9
+
+    visits = pd.DataFrame({"visit_date": pd.to_datetime(["2025-03-03", "2025-03-04", "2025-03-05"]),
+                           "visitors": [100, 50, 80]})
+    usage = b"date,item,used,unit\n2025-03-03,Buns,40,pcs\n2025-03-04,Buns,20,pcs\n2030-01-01,Buns,999,pcs\n"
+    items, kind, err = core.parse_prep_file(usage, visits=visits)
+    assert kind == "usage" and abs(items[0]["Per Guest"] - 60 / 150) < 1e-9  # unknown dates ignored
+
+    assert core.parse_prep_file(b"foo,bar\n1,2\n")[2] is not None
 
 
 def test_shock_days_use_only_known_information():
@@ -275,4 +351,6 @@ def test_backtest_reports_new_metrics():
     for key in ("base4_wape7", "shock_share"):
         assert np.isfinite(b[key])
     assert {"date", "horizon", "actual", "pred", "base", "shock"} <= set(b["backtest"].columns)
-    assert core.staffing_hit_rates(b["backtest"], 15, 40)["n_shifts"] > 0
+    roles = [{"name": "Waiters", "per": 15, "min": 1, "wage": 14.0}]
+    assert core.staffing_outcomes(b["backtest"], roles, 40)["days"] > 0
+    assert core.unusual_day_misses(b["backtest"])["model"] >= 0

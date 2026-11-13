@@ -881,56 +881,183 @@ _MODEL_TEXT = {
 for _lang, _text in _MODEL_TEXT.items():
     UI_LABELS[_lang].update(_text)
 
-# Accuracy tab: staffing hit rate and shock days ("what the forecast means for a manager")
-_ACCURACY_TEXT = {
+# Staff per role, smarter prep, and accuracy in manager terms (shifts short / overstaffed, wages, guests)
+_STAFF_TEXT = {
     "English": {
-        "acc_staff_title": "Right number of staff?",
-        "acc_staff_exact": "Exact staffing (per shift)",
-        "acc_staff_within1": "Within ±1 server",
-        "acc_pts_vs_lastweek": "pts vs 'last week'",
-        "acc_staff_caption": "On {n} past shifts the model never saw, at {gps} guests per server. "
-                             "Planning with last week's numbers: {base_exact:.0f}% exact, {base_within1:.0f}% within ±1.",
+        "tab_staff": "Staff",
+        "staff_settings": "Staff settings",
+        "staff_caption": "Who works a shift and how many guests one person handles in that shift. "
+                         "TableCast turns the forecast into people per role, hours and labour cost.",
+        "role_waiters": "Waiters", "role_cooks": "Cooks", "role_bartenders": "Bartenders",
+        "role_dishwashers": "Dishwashers",
+        "col_role": "Role", "col_per": "Guests per person (per shift)", "col_min": "Minimum per open shift",
+        "col_wage": "Wage per hour ({c})", "col_works": "Works",
+        "works_both": "Lunch & dinner", "works_lunch": "Lunch only", "works_dinner": "Dinner only",
+        "f_lunch_hours": "Lunch shift (hours)", "f_dinner_hours": "Dinner shift (hours)",
+        "f_plan_for": "Plan staff for",
+        "plan_expected": "Expected guests", "plan_busy": "A busy day (top of the range)",
+        "help_plan_for": "'A busy day' staffs for the high end of the forecast range: fewer short shifts, "
+                         "more wages. 'Expected' keeps labour cost tight.",
+        "btn_reset_roles": "Reset to default roles",
+        "staff_empty": "Add at least one role (name and guests per person).",
+        "staff_week_people": "Shifts to fill this week", "staff_week_hours": "Staff hours this week",
+        "staff_week_cost": "Labour cost this week", "staff_labour_pct": "Labour cost / revenue",
+        "col_lunch": "Lunch", "col_dinner": "Dinner", "col_hours": "Hours", "col_cost": "Labour cost",
+        "staff_rule_note": "Rule: guests ÷ guests per person, never below the minimum crew. One person absorbs a "
+                           "little extra: the next one is added only when a shift is more than 15% over capacity.",
+        "staff_summary": "Lunch {lunch} · Dinner {dinner}",
+        # prep
+        "f_pack": "Pack size", "help_pack": "Rounds up to whole packs, e.g. buns come in bags of 12. Leave empty for none.",
+        "f_service": "Service", "svc_all": "All day", "svc_lunch": "Lunch", "svc_dinner": "Dinner",
+        "f_plan_item": "Plan for", "plan_item_expected": "Expected (+ buffer)", "plan_item_busy": "Never run out",
+        "help_buffer2": "Extra % on items planned for 'Expected'. 'Never run out' items use the top of the "
+                        "forecast range instead.",
+        "prep_upload": "Upload your own list (CSV)",
+        "prep_upload_help": "Three kinds of file work. **Item list**: item, per guest, unit (optional: pack, service). "
+                            "**Recipes**: dish, share (how many guests order it, e.g. 30%), ingredient, amount, unit; "
+                            "TableCast adds up the ingredients per guest. **Past usage**: date, item, used, unit; "
+                            "TableCast learns the real amount per guest from your guest numbers on those days.",
+        "prep_upload_ok": "Loaded {n} items from your {kind}.",
+        "prep_kind_list": "item list", "prep_kind_recipe": "recipes", "prep_kind_usage": "past usage",
+        "prep_upload_err": "Could not use this file: {err}",
+        "prep_templates": "Templates:", "tpl_list": "Item list", "tpl_recipe": "Recipes", "tpl_usage": "Past usage",
+        "prep_order_title": "Order list for the week",
+        "prep_order_caption": "Totals for the 7 days, already rounded to whole packs.",
+        "col_week_total": "Week total",
+        # accuracy in manager terms
+        "acc_staff_title": "If you had scheduled with TableCast",
+        "acc_staff_intro": "The last {weeks:.0f} weeks, which the model never saw. A schedule written every Sunday "
+                           "for the week ahead, with your staff settings, compared with the guests who really came.",
+        "acc_short": "Short-staffed shifts", "acc_over": "Overstaffed shifts", "acc_extra_cost": "Wages for extra staff",
+        "acc_vs_lastweek": "{d} vs copying last week",
+        "acc_staff_caption": "Out of {shifts} open shifts. Short: at least one role had fewer people than the real "
+                             "guests needed. Overstaffed: nobody short, but someone extra. Copying last week's guests "
+                             "instead: {b_short} short, {b_over} overstaffed, {b_cost} in extra wages.",
         "acc_shock_title": "Unusual days",
-        "acc_shock_model": "Error on unusual days",
-        "acc_shock_base": "'Last week' on those days",
-        "acc_base4": "4-week weekday average (all days)",
-        "acc_shock_caption": "Unusual days ({share:.0f}% of the test days): public holidays, bridge days, events, "
-                             "rainy weekends and temperature swings of 5 °C or more. These are known in advance, "
-                             "and they are where copying last week fails most.",
+        "acc_shock_model": "Typical miss with TableCast", "acc_shock_base": "Typical miss copying last week",
+        "acc_guests": "±{n:.0f} guests",
+        "acc_shock_caption": "{days} unusual days ({share:.0f}% of the test period): public holidays, bridge days, "
+                             "events, rainy weekends and temperature swings of 5 °C or more. They are known in advance, "
+                             "and they are where copying last week goes wrong most.",
     },
     "German": {
-        "acc_staff_title": "Richtige Anzahl an Personal?",
-        "acc_staff_exact": "Personal exakt richtig (pro Schicht)",
-        "acc_staff_within1": "Höchstens ±1 Person daneben",
-        "acc_pts_vs_lastweek": "Pkt. vs. 'letzte Woche'",
-        "acc_staff_caption": "Auf {n} vergangenen Schichten, die das Modell nie gesehen hat, bei {gps} Gästen pro Person. "
-                             "Planung mit den Zahlen der Vorwoche: {base_exact:.0f}% exakt, {base_within1:.0f}% innerhalb ±1.",
+        "tab_staff": "Personal",
+        "staff_settings": "Personal-Einstellungen",
+        "staff_caption": "Wer in einer Schicht arbeitet und wie viele Gäste eine Person pro Schicht schafft. "
+                         "TableCast macht aus der Prognose Personen pro Rolle, Stunden und Personalkosten.",
+        "role_waiters": "Service", "role_cooks": "Köche", "role_bartenders": "Bar",
+        "role_dishwashers": "Spüler",
+        "col_role": "Rolle", "col_per": "Gäste pro Person (pro Schicht)", "col_min": "Minimum pro offener Schicht",
+        "col_wage": "Stundenlohn ({c})", "col_works": "Arbeitet",
+        "works_both": "Mittag & Abend", "works_lunch": "Nur Mittag", "works_dinner": "Nur Abend",
+        "f_lunch_hours": "Mittagsschicht (Stunden)", "f_dinner_hours": "Abendschicht (Stunden)",
+        "f_plan_for": "Personal planen für",
+        "plan_expected": "Erwartete Gäste", "plan_busy": "Einen vollen Tag (oberes Ende der Spanne)",
+        "help_plan_for": "'Voller Tag' plant für das obere Ende der Prognose-Spanne: seltener unterbesetzt, "
+                         "aber mehr Lohnkosten. 'Erwartet' hält die Personalkosten knapp.",
+        "btn_reset_roles": "Standard-Rollen wiederherstellen",
+        "staff_empty": "Mindestens eine Rolle eintragen (Name und Gäste pro Person).",
+        "staff_week_people": "Zu besetzende Schichten diese Woche", "staff_week_hours": "Personalstunden diese Woche",
+        "staff_week_cost": "Personalkosten diese Woche", "staff_labour_pct": "Personalkosten / Umsatz",
+        "col_lunch": "Mittag", "col_dinner": "Abend", "col_hours": "Stunden", "col_cost": "Personalkosten",
+        "staff_rule_note": "Regel: Gäste ÷ Gäste pro Person, nie unter der Mindestbesetzung. Eine Person schafft "
+                           "etwas mehr: die nächste kommt erst dazu, wenn eine Schicht mehr als 15% über der Kapazität liegt.",
+        "staff_summary": "Mittag {lunch} · Abend {dinner}",
+        "f_pack": "Packungsgröße", "help_pack": "Rundet auf ganze Packungen auf, z. B. Brötchen im 12er-Beutel. Leer = keine.",
+        "f_service": "Service", "svc_all": "Ganztags", "svc_lunch": "Mittag", "svc_dinner": "Abend",
+        "f_plan_item": "Planen für", "plan_item_expected": "Erwartet (+ Puffer)", "plan_item_busy": "Darf nie ausgehen",
+        "help_buffer2": "Zusätzliche % für Artikel mit 'Erwartet'. 'Darf nie ausgehen' nutzt stattdessen das obere "
+                        "Ende der Prognose-Spanne.",
+        "prep_upload": "Eigene Liste hochladen (CSV)",
+        "prep_upload_help": "Drei Dateiarten funktionieren. **Artikelliste**: Zutat, pro Gast, Einheit (optional: Packung, "
+                            "Service). **Rezepte**: Gericht, Anteil (wie viele Gäste es bestellen, z. B. 30%), Zutat, Menge, "
+                            "Einheit; TableCast rechnet die Zutaten pro Gast zusammen. **Verbrauch**: Datum, Zutat, "
+                            "Verbrauch, Einheit; TableCast lernt die echte Menge pro Gast aus Ihren Gästezahlen an diesen Tagen.",
+        "prep_upload_ok": "{n} Artikel aus Ihrer Datei ({kind}) geladen.",
+        "prep_kind_list": "Artikelliste", "prep_kind_recipe": "Rezepte", "prep_kind_usage": "Verbrauch",
+        "prep_upload_err": "Diese Datei konnte nicht verwendet werden: {err}",
+        "prep_templates": "Vorlagen:", "tpl_list": "Artikelliste", "tpl_recipe": "Rezepte", "tpl_usage": "Verbrauch",
+        "prep_order_title": "Bestellliste für die Woche",
+        "prep_order_caption": "Summen für die 7 Tage, bereits auf ganze Packungen gerundet.",
+        "col_week_total": "Wochensumme",
+        "acc_staff_title": "Hätten Sie mit TableCast geplant",
+        "acc_staff_intro": "Die letzten {weeks:.0f} Wochen, die das Modell nie gesehen hat. Ein Dienstplan, jeden Sonntag "
+                           "für die kommende Woche geschrieben, mit Ihren Personal-Einstellungen, verglichen mit den "
+                           "Gästen, die wirklich kamen.",
+        "acc_short": "Unterbesetzte Schichten", "acc_over": "Überbesetzte Schichten", "acc_extra_cost": "Lohn für zu viel Personal",
+        "acc_vs_lastweek": "{d} vs. Vorwoche kopieren",
+        "acc_staff_caption": "Von {shifts} offenen Schichten. Unterbesetzt: mindestens eine Rolle hatte weniger Leute, als "
+                             "die echten Gäste brauchten. Überbesetzt: niemand fehlte, aber jemand war zu viel. Mit den "
+                             "Gästezahlen der Vorwoche: {b_short} unterbesetzt, {b_over} überbesetzt, {b_cost} Lohn zu viel.",
         "acc_shock_title": "Besondere Tage",
-        "acc_shock_model": "Fehler an besonderen Tagen",
-        "acc_shock_base": "'Letzte Woche' an diesen Tagen",
-        "acc_base4": "4-Wochen-Schnitt gleicher Wochentag (alle Tage)",
-        "acc_shock_caption": "Besondere Tage ({share:.0f}% der Testtage): Feiertage, Fenstertage, Events, verregnete "
-                             "Wochenenden und Temperatursprünge ab 5 °C. Sie sind vorher bekannt, und genau dort "
-                             "versagt das Kopieren der Vorwoche am stärksten.",
+        "acc_shock_model": "Typische Abweichung mit TableCast", "acc_shock_base": "Typische Abweichung mit Vorwoche",
+        "acc_guests": "±{n:.0f} Gäste",
+        "acc_shock_caption": "{days} besondere Tage ({share:.0f}% des Testzeitraums): Feiertage, Fenstertage, Events, "
+                             "verregnete Wochenenden und Temperatursprünge ab 5 °C. Sie sind vorher bekannt, und genau "
+                             "dort geht das Kopieren der Vorwoche am meisten schief.",
     },
     "French": {
-        "acc_staff_title": "Le bon nombre de personnel ?",
-        "acc_staff_exact": "Personnel exact (par service)",
-        "acc_staff_within1": "À ±1 serveur près",
-        "acc_pts_vs_lastweek": "pts vs « semaine passée »",
-        "acc_staff_caption": "Sur {n} services passés jamais vus par le modèle, à {gps} clients par serveur. "
-                             "Avec les chiffres de la semaine passée : {base_exact:.0f}% exact, {base_within1:.0f}% à ±1.",
+        "tab_staff": "Personnel",
+        "staff_settings": "Réglages du personnel",
+        "staff_caption": "Qui travaille pendant un service et combien de clients une personne gère par service. "
+                         "TableCast transforme la prévision en personnes par poste, heures et coût salarial.",
+        "role_waiters": "Serveurs", "role_cooks": "Cuisiniers", "role_bartenders": "Barmans",
+        "role_dishwashers": "Plongeurs",
+        "col_role": "Poste", "col_per": "Clients par personne (par service)", "col_min": "Minimum par service ouvert",
+        "col_wage": "Salaire horaire ({c})", "col_works": "Travaille",
+        "works_both": "Midi & soir", "works_lunch": "Midi seulement", "works_dinner": "Soir seulement",
+        "f_lunch_hours": "Service du midi (heures)", "f_dinner_hours": "Service du soir (heures)",
+        "f_plan_for": "Prévoir le personnel pour",
+        "plan_expected": "Clients attendus", "plan_busy": "Une journée chargée (haut de la fourchette)",
+        "help_plan_for": "« Journée chargée » prévoit le haut de la fourchette : moins de services en sous-effectif, "
+                         "plus de salaires. « Attendus » garde le coût salarial serré.",
+        "btn_reset_roles": "Rétablir les postes par défaut",
+        "staff_empty": "Ajoutez au moins un poste (nom et clients par personne).",
+        "staff_week_people": "Services à pourvoir cette semaine", "staff_week_hours": "Heures de personnel cette semaine",
+        "staff_week_cost": "Coût salarial cette semaine", "staff_labour_pct": "Coût salarial / chiffre d'affaires",
+        "col_lunch": "Midi", "col_dinner": "Soir", "col_hours": "Heures", "col_cost": "Coût salarial",
+        "staff_rule_note": "Règle : clients ÷ clients par personne, jamais sous l'équipe minimum. Une personne absorbe "
+                           "un peu plus : la suivante n'est ajoutée que si le service dépasse la capacité de plus de 15%.",
+        "staff_summary": "Midi {lunch} · Soir {dinner}",
+        "f_pack": "Conditionnement", "help_pack": "Arrondit au paquet entier, p. ex. pains par sachet de 12. Vide = aucun.",
+        "f_service": "Service", "svc_all": "Toute la journée", "svc_lunch": "Midi", "svc_dinner": "Soir",
+        "f_plan_item": "Prévoir pour", "plan_item_expected": "Attendu (+ marge)", "plan_item_busy": "Jamais en rupture",
+        "help_buffer2": "% en plus pour les articles « Attendu ». « Jamais en rupture » utilise le haut de la "
+                        "fourchette de prévision.",
+        "prep_upload": "Importer votre propre liste (CSV)",
+        "prep_upload_help": "Trois types de fichiers. **Liste d'articles** : article, par client, unité (option : "
+                            "conditionnement, service). **Recettes** : plat, part (combien de clients le commandent, p. ex. "
+                            "30%), ingrédient, quantité, unité ; TableCast additionne les ingrédients par client. "
+                            "**Consommation** : date, article, consommé, unité ; TableCast apprend la vraie quantité par "
+                            "client à partir de vos clients ces jours-là.",
+        "prep_upload_ok": "{n} articles chargés depuis votre fichier ({kind}).",
+        "prep_kind_list": "liste d'articles", "prep_kind_recipe": "recettes", "prep_kind_usage": "consommation",
+        "prep_upload_err": "Impossible d'utiliser ce fichier : {err}",
+        "prep_templates": "Modèles :", "tpl_list": "Liste d'articles", "tpl_recipe": "Recettes", "tpl_usage": "Consommation",
+        "prep_order_title": "Liste de commande de la semaine",
+        "prep_order_caption": "Totaux sur 7 jours, déjà arrondis au conditionnement.",
+        "col_week_total": "Total semaine",
+        "acc_staff_title": "Si vous aviez planifié avec TableCast",
+        "acc_staff_intro": "Les {weeks:.0f} dernières semaines, jamais vues par le modèle. Un planning écrit chaque "
+                           "dimanche pour la semaine suivante, avec vos réglages de personnel, comparé aux clients "
+                           "réellement venus.",
+        "acc_short": "Services en sous-effectif", "acc_over": "Services en sureffectif", "acc_extra_cost": "Salaires en trop",
+        "acc_vs_lastweek": "{d} vs copier la semaine passée",
+        "acc_staff_caption": "Sur {shifts} services ouverts. Sous-effectif : au moins un poste avait moins de personnes "
+                             "que nécessaire. Sureffectif : personne ne manquait, mais quelqu'un était en trop. En copiant "
+                             "la semaine passée : {b_short} en sous-effectif, {b_over} en sureffectif, {b_cost} de salaires en trop.",
         "acc_shock_title": "Jours inhabituels",
-        "acc_shock_model": "Erreur les jours inhabituels",
-        "acc_shock_base": "« Semaine passée » ces jours-là",
-        "acc_base4": "Moyenne 4 semaines même jour (tous les jours)",
-        "acc_shock_caption": "Jours inhabituels ({share:.0f}% des jours de test) : jours fériés, ponts, événements, "
-                             "week-ends pluvieux et écarts de température de 5 °C ou plus. Ils sont connus à l'avance, "
-                             "et c'est là que copier la semaine passée échoue le plus.",
+        "acc_shock_model": "Écart typique avec TableCast", "acc_shock_base": "Écart typique en copiant la semaine passée",
+        "acc_guests": "±{n:.0f} clients",
+        "acc_shock_caption": "{days} jours inhabituels ({share:.0f}% de la période de test) : jours fériés, ponts, "
+                             "événements, week-ends pluvieux et écarts de température de 5 °C ou plus. Ils sont connus "
+                             "à l'avance, et c'est là que copier la semaine passée se trompe le plus.",
     },
 }
-for _lang, _text in _ACCURACY_TEXT.items():
+for _lang, _text in _STAFF_TEXT.items():
     UI_LABELS[_lang].update(_text)
+for _lang, _text in {"English": "Staff needed", "German": "Benötigtes Personal", "French": "Personnel nécessaire"}.items():
+    TRANSLATIONS[_lang]["col_servers"] = _text
 UI_LABELS["English"]["f_subdiv"] = "State (holidays & school holidays)"
 UI_LABELS["German"]["f_subdiv"] = "Bundesland (Feiertage & Schulferien)"
 UI_LABELS["French"]["f_subdiv"] = "Région (jours fériés & vacances scolaires)"
