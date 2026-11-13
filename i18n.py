@@ -880,6 +880,57 @@ _MODEL_TEXT = {
 }
 for _lang, _text in _MODEL_TEXT.items():
     UI_LABELS[_lang].update(_text)
+
+# Accuracy tab: staffing hit rate and shock days ("what the forecast means for a manager")
+_ACCURACY_TEXT = {
+    "English": {
+        "acc_staff_title": "Right number of staff?",
+        "acc_staff_exact": "Exact staffing (per shift)",
+        "acc_staff_within1": "Within ±1 server",
+        "acc_pts_vs_lastweek": "pts vs 'last week'",
+        "acc_staff_caption": "On {n} past shifts the model never saw, at {gps} guests per server. "
+                             "Planning with last week's numbers: {base_exact:.0f}% exact, {base_within1:.0f}% within ±1.",
+        "acc_shock_title": "Unusual days",
+        "acc_shock_model": "Error on unusual days",
+        "acc_shock_base": "'Last week' on those days",
+        "acc_base4": "4-week weekday average (all days)",
+        "acc_shock_caption": "Unusual days ({share:.0f}% of the test days): public holidays, bridge days, events, "
+                             "rainy weekends and temperature swings of 5 °C or more. These are known in advance, "
+                             "and they are where copying last week fails most.",
+    },
+    "German": {
+        "acc_staff_title": "Richtige Anzahl an Personal?",
+        "acc_staff_exact": "Personal exakt richtig (pro Schicht)",
+        "acc_staff_within1": "Höchstens ±1 Person daneben",
+        "acc_pts_vs_lastweek": "Pkt. vs. 'letzte Woche'",
+        "acc_staff_caption": "Auf {n} vergangenen Schichten, die das Modell nie gesehen hat, bei {gps} Gästen pro Person. "
+                             "Planung mit den Zahlen der Vorwoche: {base_exact:.0f}% exakt, {base_within1:.0f}% innerhalb ±1.",
+        "acc_shock_title": "Besondere Tage",
+        "acc_shock_model": "Fehler an besonderen Tagen",
+        "acc_shock_base": "'Letzte Woche' an diesen Tagen",
+        "acc_base4": "4-Wochen-Schnitt gleicher Wochentag (alle Tage)",
+        "acc_shock_caption": "Besondere Tage ({share:.0f}% der Testtage): Feiertage, Fenstertage, Events, verregnete "
+                             "Wochenenden und Temperatursprünge ab 5 °C. Sie sind vorher bekannt, und genau dort "
+                             "versagt das Kopieren der Vorwoche am stärksten.",
+    },
+    "French": {
+        "acc_staff_title": "Le bon nombre de personnel ?",
+        "acc_staff_exact": "Personnel exact (par service)",
+        "acc_staff_within1": "À ±1 serveur près",
+        "acc_pts_vs_lastweek": "pts vs « semaine passée »",
+        "acc_staff_caption": "Sur {n} services passés jamais vus par le modèle, à {gps} clients par serveur. "
+                             "Avec les chiffres de la semaine passée : {base_exact:.0f}% exact, {base_within1:.0f}% à ±1.",
+        "acc_shock_title": "Jours inhabituels",
+        "acc_shock_model": "Erreur les jours inhabituels",
+        "acc_shock_base": "« Semaine passée » ces jours-là",
+        "acc_base4": "Moyenne 4 semaines même jour (tous les jours)",
+        "acc_shock_caption": "Jours inhabituels ({share:.0f}% des jours de test) : jours fériés, ponts, événements, "
+                             "week-ends pluvieux et écarts de température de 5 °C ou plus. Ils sont connus à l'avance, "
+                             "et c'est là que copier la semaine passée échoue le plus.",
+    },
+}
+for _lang, _text in _ACCURACY_TEXT.items():
+    UI_LABELS[_lang].update(_text)
 UI_LABELS["English"]["f_subdiv"] = "State (holidays & school holidays)"
 UI_LABELS["German"]["f_subdiv"] = "Bundesland (Feiertage & Schulferien)"
 UI_LABELS["French"]["f_subdiv"] = "Région (jours fériés & vacances scolaires)"

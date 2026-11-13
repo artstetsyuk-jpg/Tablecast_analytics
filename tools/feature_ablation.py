@@ -6,6 +6,10 @@
 
 Datasets are CSV:City:COUNTRY (country may include a state, e.g. DE-BW):
     py tools/feature_ablation.py data.csv:Stuttgart:DE-BW kiel.csv:Kiel:DE-SH --model recommended
+    py tools/feature_ablation.py ... --holdout   # score an EARLIER period (drops the last 25% of history)
+
+Safeguard: an option is only flagged for removal if dropping it lowers the average 7-day error by
+>= MIN_GAIN points AND no dataset gets worse by more than MAX_LOSS points.
 """
 import argparse
 import json
@@ -20,11 +24,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import core  # noqa: E402
 
+MIN_GAIN = 0.2
+MAX_LOSS = 0.3
 
-def load(path):
+
+def load(path, holdout=False):
     visits, _, error = core.clean_visits(core.read_csv_bytes(Path(path).read_bytes()))
     if error:
         raise SystemExit(f"{path}: {error[0]}")
+    if holdout:  # drop the last 25%: the backtest then scores an earlier period
+        hist = core.history_only(visits)
+        cutoff = hist["visit_date"].iloc[int(len(hist) * 0.75)]
+        visits = visits[visits["visit_date"] < cutoff].reset_index(drop=True)
     return visits
 
 
@@ -44,6 +55,7 @@ def main():
     parser.add_argument("datasets", nargs="+")
     parser.add_argument("--model", default="recommended")
     parser.add_argument("--single", action="store_true", help="also run each option on its own")
+    parser.add_argument("--holdout", action="store_true", help="score an earlier period instead")
     parser.add_argument("--out", help="write all results as JSON here")
     args = parser.parse_args()
     warnings.filterwarnings("ignore")
@@ -51,7 +63,7 @@ def main():
     rows = []
     for spec in args.datasets:
         path, city, country = spec.rsplit(":", 2)
-        visits = load(path)
+        visits = load(path, args.holdout)
         for name, options in configs(args.single).items():
             t0 = time.perf_counter()
             b = core.train_bundle(visits, city, country, model_spec=args.model, options=options)
@@ -69,11 +81,14 @@ def main():
                                        worst_change=("vs_off", "max"), seconds=("seconds", "mean"))
     print(f"\nSUMMARY over {df.dataset.nunique()} datasets (7-day error; negative change = better than 'off')")
     print(summary.sort_values("mean_7d").round(2).to_string())
-    all_mean = summary.loc["all", "mean_7d"]
-    print("\nLEAVE-ONE-OUT: removing the option changes the average 7-day error by (negative = the option HURTS)")
+    full = df[df.config == "all"].set_index("dataset")["wape7"]
+    print("\nLEAVE-ONE-OUT: removing the option changes the 7-day error by (negative = the option HURTS)")
     for k in core.FEATURE_OPTIONS:
-        if f"all-{k}" in summary.index:
-            print(f"  {k:14} {summary.loc[f'all-{k}', 'mean_7d'] - all_mean:+.2f} pts")
+        change = df[df.config == f"all-{k}"].set_index("dataset")["wape7"] - full
+        if change.empty:
+            continue
+        verdict = "REMOVE?" if change.mean() <= -MIN_GAIN and change.max() <= MAX_LOSS else "keep"
+        print(f"  {k:14} mean {change.mean():+.2f} pts  worst dataset {change.max():+.2f}  -> {verdict}")
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=1))
 

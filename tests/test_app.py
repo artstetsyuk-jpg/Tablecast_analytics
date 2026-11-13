@@ -220,3 +220,10 @@ def test_model_menu_and_custom_blend_work(account):
     at = at.selectbox(key=f"model_{account}").set_value("classic").run()
     at = at.checkbox(key=f"opt_direct_{account}").uncheck().run()
     assert not at.exception
+
+
+def test_accuracy_tab_shows_staffing_and_unusual_days(account):
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert "Exact staffing (per shift)" in labels and "Within ±1 server" in labels

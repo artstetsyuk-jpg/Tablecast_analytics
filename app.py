@@ -1033,6 +1033,25 @@ with tab_ai:
         st.warning(ui.plain(t["verdict_worse"]))
     st.caption(baseline_text)
 
+    # "The other side": what the forecast means for a manager, on days it never saw.
+    staffing = core.staffing_hit_rates(bundle.get("backtest"), int(guests_per_server), lunch_share, weekend_lunch_share)
+    if staffing:
+        st.subheader(L["acc_staff_title"])
+        s1, s2 = st.columns(2)
+        s1.metric(L["acc_staff_exact"], f"{staffing['model_exact']:.0f}%",
+                  f"{staffing['model_exact'] - staffing['base_exact']:+.0f} {L['acc_pts_vs_lastweek']}")
+        s2.metric(L["acc_staff_within1"], f"{staffing['model_within1']:.0f}%",
+                  f"{staffing['model_within1'] - staffing['base_within1']:+.0f} {L['acc_pts_vs_lastweek']}")
+        st.caption(L["acc_staff_caption"].format(n=staffing["n_shifts"], gps=int(guests_per_server),
+                                                 base_exact=staffing["base_exact"], base_within1=staffing["base_within1"]))
+    if np.isfinite(bundle.get("shock_wape7", np.nan)):
+        st.subheader(L["acc_shock_title"])
+        k1, k2, k3 = st.columns(3)
+        k1.metric(L["acc_shock_model"], core.fmt_pct(bundle["shock_wape7"]))
+        k2.metric(L["acc_shock_base"], core.fmt_pct(bundle["base_shock_wape7"]))
+        k3.metric(L["acc_base4"], core.fmt_pct(bundle["base4_wape7"]))
+        st.caption(L["acc_shock_caption"].format(share=bundle["shock_share"]))
+
     st.subheader(t["main_chart_header"])
     backtest = (
         bundle["chart"]
