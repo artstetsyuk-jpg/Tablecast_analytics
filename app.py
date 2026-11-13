@@ -86,9 +86,16 @@ def cached_read_csv(raw_bytes):
 
 
 @st.cache_resource(show_spinner=False)
-def cached_train(visits, station, country, events=None, model_spec=None, options_items=()):
+def cached_train(visits, station, country, events=None, model_spec=None, options_items=(), core_version=""):
+    """core_version (a fingerprint of core.py) is part of the cache key: after a deploy, a model
+    trained by the OLD code must never be used with the reloaded NEW code (that crashed the app)."""
     return core.train_bundle(visits, station, country, events=events, model_spec=model_spec,
                              options=dict(options_items))
+
+
+def core_code_version():
+    with open(core.__file__, "rb") as f:
+        return hashlib.sha1(f.read()).hexdigest()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -740,7 +747,7 @@ if not guest_demo:
 # ============================================================================
 with st.spinner(t["spinner"]):
     bundle = cached_train(visits, station, holiday_country, saved_events, model_spec,
-                          tuple(sorted(feature_options.items())))
+                          tuple(sorted(feature_options.items())), core_version=core_code_version())
 if bundle is None:
     st.error(t["err_training"])
     st.stop()
