@@ -1108,6 +1108,22 @@ def signed_money(value):
     return ("+" if value >= 0 else "-") + money(abs(value))
 
 
+def backtest_in_guests():
+    """The 7-day backtest in guests (a sales file is turned into estimated guests for staff numbers)."""
+    bt = bundle.get("backtest")
+    if money_unit and bt is not None and len(bt):
+        spend = core.spend_per_guest(bt["date"], lunch_share, weekend_lunch_share, avg_spend, dinner_spend).to_numpy()
+        bt = bt.assign(**{c: bt[c] / spend for c in ("actual", "pred", "base")})
+    return bt
+
+
+def real_guests_per_day():
+    hist = core.history_only(visits).set_index("visit_date")["visitors"]
+    if money_unit:
+        hist = hist / core.spend_per_guest(hist.index, lunch_share, weekend_lunch_share, avg_spend, dinner_spend).to_numpy()
+    return hist
+
+
 with tab_staff:
     st.caption(L["staff_caption"])
     roles_now = current_roles()
@@ -1167,6 +1183,80 @@ with tab_staff:
             st.rerun()
     if not roles_now:
         st.info(L["staff_empty"])
+
+    # --- Who really worked: their rota / time clock vs their rule and vs TableCast ---
+    st.subheader(L["real_title"])
+    st.caption(L["real_caption"])
+    staff_key, staff_msg_key = f"staff_actual_{slug}", f"staff_msg_{slug}"
+    if staff_key not in st.session_state:
+        st.session_state[staff_key] = None if guest_demo else storage.load_staff(slug)
+    up_cols = st.columns([3, 1], vertical_alignment="bottom")
+    with up_cols[0]:
+        staff_upload = st.file_uploader(L["real_upload"], type=["csv", "txt"], key=f"staff_upload_{slug}",
+                                        help=L["real_upload_help"])
+    up_cols[1].download_button(
+        L["real_template"],
+        ("Datum;Name;Bereich;Kommen;Gehen\n07.11.2026;Anna;Service;10:30;15:30\n07.11.2026;Ben;Service;16:30;22:30\n"
+         "07.11.2026;Cem;Küche;10:00;22:00\n").encode("utf-8-sig"),
+        file_name="tablecast_staff_template.csv", mime="text/csv", key=f"staff_tpl_{slug}", width="stretch",
+        icon=":material/download:")
+    if staff_upload is not None:
+        staff_digest = hashlib.sha1(staff_upload.getvalue()).hexdigest()
+        if st.session_state.get(f"staff_seen_{slug}") != staff_digest:  # once per file
+            st.session_state[f"staff_seen_{slug}"] = staff_digest
+            staff_rows, staff_err = core.parse_staff_file(staff_upload.getvalue())
+            if staff_err:
+                st.session_state[staff_msg_key] = ("error", L["real_err"].format(err=staff_err))
+            else:
+                if not guest_demo and slug in saved_names:
+                    staff_rows = storage.save_staff(slug, staff_rows)
+                st.session_state[staff_key] = staff_rows
+                st.session_state[staff_msg_key] = ("success", L["real_ok"].format(n=staff_rows["date"].nunique()))
+    if st.session_state.get(staff_msg_key):
+        msg_level, msg_text = st.session_state[staff_msg_key]
+        (st.error if msg_level == "error" else st.success)(msg_text)
+
+    actual_staff = st.session_state[staff_key]
+    if actual_staff is not None and len(actual_staff) and roles_now:
+        reality = core.staffing_reality(actual_staff, real_guests_per_day(), roles_now, lunch_share,
+                                        weekend_lunch_share, shift_hours, backtest_in_guests(), bundle["intervals"],
+                                        staff_plan_for)
+        if not reality or not reality["shifts"]:
+            st.info(L["real_no_overlap"])
+        else:
+            real = reality["real"]
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric(L["real_shifts"], f"{reality['shifts']:,}")
+            r2.metric(L["real_short"], f"{real['short']:,}")
+            r3.metric(L["real_over"], f"{real['over']:,}")
+            r4.metric(L["real_cost"], money(real["extra_cost"]))
+            st.caption(L["real_explain"].format(days=reality["days"]))
+
+            if reality["ratios"]:
+                yours = ", ".join(f"{name} {val:.0f}" for name, val in reality["ratios"].items())
+                setting = ", ".join(f"{r['name']} {r['per']:.0f}" for r in roles_now if r["name"] in reality["ratios"])
+                st.markdown(L["real_ratios"].format(yours=yours, setting=setting))
+                if st.button(L["real_use_btn"], key=f"use_real_ratios_{slug}"):
+                    rows_now = editor_records(st.session_state[roles_base_key], roles_editor_key)
+                    for row in rows_now:
+                        if str(row.get("name")) in reality["ratios"]:
+                            row["per"] = float(round(reality["ratios"][str(row["name"])]))
+                    st.session_state[roles_base_key] = rows_now
+                    st.session_state.pop(roles_editor_key, None)
+                    st.rerun()
+
+            same = reality["same"]
+            if same:
+                st.markdown(f"**{L['real_compare_title'].format(n=same['shifts'])}**")
+                st.dataframe(pd.DataFrame([
+                    {L["col_plan"]: L["row_actual"], L["col_short"]: same["real_short"], L["col_over"]: same["real_over"],
+                     L["col_wages"]: money(same["real_extra_cost"])},
+                    {L["col_plan"]: L["row_tablecast"], L["col_short"]: same["tc_short"], L["col_over"]: same["tc_over"],
+                     L["col_wages"]: money(same["tc_extra_cost"])},
+                ]), hide_index=True, width="stretch")
+                st.caption(L["real_compare_caption"])
+            if reality["unmatched"]:
+                st.caption(L["real_unmatched"].format(roles=", ".join(reality["unmatched"])))
 
 # ----------------------------------------------------------------------------
 # Kitchen prep (custom ingredients + presets)
@@ -1348,12 +1438,7 @@ with tab_ai:
     st.caption(baseline_text)
 
     # What the forecast would have meant for a manager's schedule, on past weeks it never saw.
-    staff_backtest = bundle.get("backtest")
-    if money_unit and staff_backtest is not None and len(staff_backtest):  # sales -> estimated guests for staff
-        spend = core.spend_per_guest(staff_backtest["date"], lunch_share, weekend_lunch_share, avg_spend,
-                                     dinner_spend).to_numpy()
-        staff_backtest = staff_backtest.assign(**{c: staff_backtest[c] / spend for c in ("actual", "pred", "base")})
-    outcome = core.staffing_outcomes(staff_backtest, current_roles(), lunch_share, weekend_lunch_share,
+    outcome = core.staffing_outcomes(backtest_in_guests(), current_roles(), lunch_share, weekend_lunch_share,
                                      shift_hours, bundle["intervals"], staff_plan_for)
     if outcome:
         st.subheader(L["acc_staff_title"])

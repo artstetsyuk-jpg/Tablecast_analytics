@@ -1063,6 +1063,97 @@ UI_LABELS["German"]["f_subdiv"] = "Bundesland (Feiertage & Schulferien)"
 UI_LABELS["French"]["f_subdiv"] = "Région (jours fériés & vacances scolaires)"
 
 
+# Staff tab: who really worked (rota / time clock upload)
+_REAL_STAFF_TEXT = {
+    "English": {
+        "real_title": "Who really worked",
+        "real_caption": "Upload your rota or time-clock export. TableCast compares it with the guests who came: "
+                        "how many guests each person really handled, where you were short or overstaffed, and what "
+                        "TableCast would have planned for the same shifts.",
+        "real_upload": "Rota / time clock (CSV)",
+        "real_upload_help": "Any of these works. **Time clock / rota**: one row per person and shift with date, role "
+                            "(e.g. Service, Küche), start and end time. **Shift list**: date, shift (lunch/dinner), "
+                            "role, number of people. **Table**: date plus one column per role with the number of people. "
+                            "Someone counts for lunch if they work at least an hour between 11:00 and 15:00, for "
+                            "dinner between 17:00 and 22:00.",
+        "real_template": "Template",
+        "real_ok": "Loaded staff for {n} days.",
+        "real_err": "Could not use this file: {err}",
+        "real_no_overlap": "No day in the staff file matches a day with guest numbers yet.",
+        "real_shifts": "Shifts compared", "real_short": "Short by your rule", "real_over": "Overstaffed by your rule",
+        "real_cost": "Wages for extra staff (paid)",
+        "real_explain": "{days} days in both files. Short: fewer people than your staff settings say the real guests "
+                        "needed. Overstaffed: more than needed. Only shifts that appear in your file are counted.",
+        "real_ratios": "**Guests one person really handled** (typical shift): {yours}. Your setting: {setting}.",
+        "real_use_btn": "Use my real numbers",
+        "real_compare_title": "Your schedule vs TableCast, on the same {n} shifts",
+        "col_plan": "Plan", "col_short": "Short", "col_over": "Overstaffed", "col_wages": "Wages for extra staff",
+        "row_actual": "What you actually scheduled", "row_tablecast": "TableCast (written the Sunday before)",
+        "real_compare_caption": "Both judged by the same staff settings and the guests who really came.",
+        "real_unmatched": "Not matched to a role in your settings (ignored): {roles}. Add a role with that name to include it.",
+    },
+    "German": {
+        "real_title": "Wer wirklich gearbeitet hat",
+        "real_caption": "Laden Sie Ihren Dienstplan oder Ihre Zeiterfassung hoch. TableCast vergleicht ihn mit den "
+                        "Gästen, die kamen: wie viele Gäste eine Person wirklich geschafft hat, wo Sie unter- oder "
+                        "überbesetzt waren, und was TableCast für dieselben Schichten geplant hätte.",
+        "real_upload": "Dienstplan / Zeiterfassung (CSV)",
+        "real_upload_help": "Alle diese Formen gehen. **Zeiterfassung / Dienstplan**: eine Zeile pro Person und Schicht "
+                            "mit Datum, Bereich (z. B. Service, Küche), Kommen und Gehen. **Schichtliste**: Datum, Schicht "
+                            "(Mittag/Abend), Bereich, Anzahl Personen. **Tabelle**: Datum und eine Spalte pro Bereich mit "
+                            "der Anzahl Personen. Mittags zählt, wer mindestens eine Stunde zwischen 11 und 15 Uhr "
+                            "arbeitet, abends zwischen 17 und 22 Uhr.",
+        "real_template": "Vorlage",
+        "real_ok": "Personal für {n} Tage geladen.",
+        "real_err": "Diese Datei konnte nicht verwendet werden: {err}",
+        "real_no_overlap": "Noch kein Tag in der Personaldatei passt zu einem Tag mit Gästezahlen.",
+        "real_shifts": "Verglichene Schichten", "real_short": "Unterbesetzt laut Ihrer Regel",
+        "real_over": "Überbesetzt laut Ihrer Regel", "real_cost": "Lohn für zu viel Personal (bezahlt)",
+        "real_explain": "{days} Tage in beiden Dateien. Unterbesetzt: weniger Leute, als laut Ihren Personal-Einstellungen "
+                        "für die echten Gäste nötig waren. Überbesetzt: mehr als nötig. Gezählt werden nur Schichten, "
+                        "die in Ihrer Datei vorkommen.",
+        "real_ratios": "**So viele Gäste hat eine Person wirklich geschafft** (typische Schicht): {yours}. "
+                       "Ihre Einstellung: {setting}.",
+        "real_use_btn": "Meine echten Werte übernehmen",
+        "real_compare_title": "Ihr Dienstplan vs. TableCast, auf denselben {n} Schichten",
+        "col_plan": "Plan", "col_short": "Unterbesetzt", "col_over": "Überbesetzt", "col_wages": "Lohn für zu viel Personal",
+        "row_actual": "Was Sie wirklich eingeteilt haben", "row_tablecast": "TableCast (am Sonntag davor erstellt)",
+        "real_compare_caption": "Beide gemessen mit denselben Personal-Einstellungen und den Gästen, die wirklich kamen.",
+        "real_unmatched": "Keiner Rolle zugeordnet (ignoriert): {roles}. Legen Sie eine Rolle mit diesem Namen an, um sie einzubeziehen.",
+    },
+    "French": {
+        "real_title": "Qui a vraiment travaillé",
+        "real_caption": "Importez votre planning ou votre pointage. TableCast le compare aux clients venus : combien de "
+                        "clients chaque personne a vraiment servis, où vous étiez en sous- ou sureffectif, et ce que "
+                        "TableCast aurait prévu pour les mêmes services.",
+        "real_upload": "Planning / pointage (CSV)",
+        "real_upload_help": "Ces formes fonctionnent. **Pointage / planning** : une ligne par personne et service avec "
+                            "date, poste (p. ex. salle, cuisine), début et fin. **Liste des services** : date, service "
+                            "(midi/soir), poste, nombre de personnes. **Tableau** : date et une colonne par poste avec le "
+                            "nombre de personnes. Compte pour le midi qui travaille au moins une heure entre 11 h et 15 h, "
+                            "pour le soir entre 17 h et 22 h.",
+        "real_template": "Modèle",
+        "real_ok": "Personnel chargé pour {n} jours.",
+        "real_err": "Impossible d'utiliser ce fichier : {err}",
+        "real_no_overlap": "Aucun jour du fichier du personnel ne correspond encore à un jour avec des clients.",
+        "real_shifts": "Services comparés", "real_short": "Sous-effectif selon votre règle",
+        "real_over": "Sureffectif selon votre règle", "real_cost": "Salaires en trop (payés)",
+        "real_explain": "{days} jours dans les deux fichiers. Sous-effectif : moins de personnes que vos réglages ne le "
+                        "demandent pour les clients réels. Sureffectif : plus que nécessaire. Seuls les services présents "
+                        "dans votre fichier sont comptés.",
+        "real_ratios": "**Clients réellement servis par personne** (service typique) : {yours}. Votre réglage : {setting}.",
+        "real_use_btn": "Utiliser mes vrais chiffres",
+        "real_compare_title": "Votre planning vs TableCast, sur les mêmes {n} services",
+        "col_plan": "Planning", "col_short": "Sous-effectif", "col_over": "Sureffectif", "col_wages": "Salaires en trop",
+        "row_actual": "Ce que vous avez réellement planifié", "row_tablecast": "TableCast (établi le dimanche précédent)",
+        "real_compare_caption": "Les deux jugés avec les mêmes réglages de personnel et les clients réellement venus.",
+        "real_unmatched": "Non rattaché à un poste de vos réglages (ignoré) : {roles}. Ajoutez un poste de ce nom pour l'inclure.",
+    },
+}
+for _lang, _text in _REAL_STAFF_TEXT.items():
+    UI_LABELS[_lang].update(_text)
+
+
 # ----------------------------------------------------------------------------
 # What a restaurant's file counts: the app uses the file's own word everywhere
 # ----------------------------------------------------------------------------

@@ -82,6 +82,31 @@ def save_events(slug, events):
     return clean
 
 
+STAFF_COLUMNS = ["date", "shift", "role", "people"]
+
+
+def load_staff(slug):
+    """Who actually worked (see core.parse_staff_file), or None."""
+    path = _location_dir(slug) / "staff_actual.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, parse_dates=["date"])
+    return df[STAFF_COLUMNS] if set(STAFF_COLUMNS) <= set(df.columns) else None
+
+
+def save_staff(slug, rows):
+    """Merge newly uploaded staff rows into the saved ones; days in the new file replace the old days."""
+    old = load_staff(slug)
+    if old is not None and len(old):
+        old = old[~old["date"].isin(set(rows["date"]))]
+        rows = pd.concat([old, rows], ignore_index=True)
+    rows = rows.sort_values(["date", "shift", "role"]).reset_index(drop=True)
+    folder = _location_dir(slug)
+    folder.mkdir(parents=True, exist_ok=True)
+    rows[STAFF_COLUMNS].to_csv(folder / "staff_actual.csv", index=False)
+    return rows
+
+
 def list_locations():
     """[(slug, display_name), ...] for every location that has saved history or settings."""
     root = data_dir() / "locations"

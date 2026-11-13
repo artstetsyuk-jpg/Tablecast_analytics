@@ -1007,6 +1007,228 @@ def unusual_day_misses(backtest):
             "share": float(backtest.drop_duplicates("date")["shock"].mean() * 100)}
 
 
+# ----------------------------------------------------------------------------
+# Who really worked: rota / time-clock files, compared with the rule and with TableCast
+# ----------------------------------------------------------------------------
+# Someone counts for a shift when their hours overlap its window by at least an hour
+# (a 10:00-22:00 shift counts for both lunch and dinner).
+SHIFT_WINDOWS = {"lunch": (11.0, 15.0), "dinner": (17.0, 22.0)}
+MIN_OVERLAP_HOURS = 1.0
+_STAFF_ALIASES = {
+    "role": ["role", "rolle", "position", "funktion", "abteilung", "department", "bereich", "job", "poste",
+             "taetigkeit", "job title", "stelle", "team"],
+    "start": ["start", "beginn", "von", "kommen", "clock in", "start time", "startzeit", "arbeitsbeginn", "debut",
+              "heure debut", "from", "in", "dienstbeginn"],
+    "end": ["end", "ende", "bis", "gehen", "clock out", "end time", "endzeit", "arbeitsende", "fin", "heure fin",
+            "to", "out", "dienstende"],
+    "shift": ["shift", "schicht", "dienst", "service period", "service"],
+    "people": ["people", "personen", "anzahl", "count", "staff", "headcount", "nombre", "anzahl mitarbeiter",
+               "mitarbeiter anzahl", "number of staff"],
+}
+_SHIFT_WORDS = {
+    "lunch": {"lunch", "mittag", "mittags", "midi", "frueh", "fruehschicht", "morning", "am", "dejeuner", "tag"},
+    "dinner": {"dinner", "abend", "abends", "soir", "spaet", "spaetschicht", "evening", "pm", "diner", "nacht"},
+    "both": {"both", "ganztags", "ganzer tag", "all day", "full day", "doppel", "doppelschicht", "journee", "double"},
+}
+_ROLE_GROUPS = [
+    {"kellner", "kellnerin", "service", "servicekraft", "bedienung", "waiter", "waiters", "waitress", "server",
+     "servers", "serveur", "serveurs", "serveuse", "foh", "runner", "kellnerinnen"},
+    {"koch", "koeche", "koechin", "kueche", "chef", "chefs", "cook", "cooks", "kitchen", "cuisinier", "cuisiniers",
+     "cuisine", "boh", "beikoch", "jungkoch", "kuechenhilfe"},
+    {"bar", "barkeeper", "bartender", "bartenders", "barmann", "barman", "barmans", "barista"},
+    {"abwasch", "spueler", "dishwasher", "dishwashers", "plongeur", "plongeurs"},
+    {"verkauf", "verkaeufer", "verkaeuferin", "sales", "vendeur", "vendeuse", "theke"},
+    {"backstube", "baecker", "baker", "bakers", "boulanger"},
+]
+
+
+def _staff_col(columns, kind, exclude=()):
+    cols = [c for c in columns if c not in exclude]
+    normed = {c: _norm(c) for c in cols}
+    for alias in _STAFF_ALIASES[kind]:
+        for c in cols:
+            if normed[c] == alias:
+                return c
+    for alias in _STAFF_ALIASES[kind]:
+        if len(alias) <= 3:
+            continue
+        for c in cols:
+            if set(alias.split()) <= set(normed[c].split()):
+                return c
+    return None
+
+
+def _clock_hours(series):
+    """'12:14', '7:30', '2026-11-07 12:14', '07.11.2026 19:02' -> hours of the day (12.23); NaN if no time."""
+    m = series.astype(str).str.extract(r"(?:^|[\sT])(\d{1,2})[:h](\d{2})")
+    return m[0].astype(float) + m[1].astype(float) / 60.0
+
+
+def match_role(name, roles):
+    """A role name from the file -> the matching role in the staff settings (or None)."""
+    n = _norm(name)
+    for r in roles:
+        if _norm(r["name"]) == n:
+            return r["name"]
+    words = set(n.split()) | {n}
+    group = next((g for g in _ROLE_GROUPS if words & g), None)
+    if group:
+        for r in roles:
+            rn = _norm(r["name"])
+            if (set(rn.split()) | {rn}) & group:
+                return r["name"]
+    return None
+
+
+def parse_staff_file(raw_bytes):
+    """Read who actually worked. Three layouts are recognised by their columns:
+
+      time clock / rota   date, role, start, end [, name]     one row per person and shift
+      shift list          date, shift, role, people            Mittag/Abend, number of people
+      table               date [, shift], one column per role  e.g. Datum;Kellner;Köche
+    Returns (rows, error): rows = DataFrame date, shift (lunch/dinner), role, people."""
+    try:
+        df = read_csv_bytes(raw_bytes)
+    except Exception as exc:  # noqa: BLE001 - shown to the user
+        return None, f"could not read the file ({type(exc).__name__})"
+    cols = list(df.columns)
+    start_c = _staff_col(cols, "start")
+    date_c = _match(cols, "date", exclude={start_c})
+    if date_c is None and start_c is not None and _parse_dates(df[start_c])[0].notna().mean() >= 0.5:
+        date_c = start_c  # "2026-11-07 10:00" in the start column carries the date too
+    if date_c is None:
+        return None, "no date column"
+    used = {date_c, start_c}
+    end_c = _staff_col(cols, "end", exclude=used)
+    used.add(end_c)
+    role_c = _staff_col(cols, "role", exclude=used)
+    used.add(role_c)
+    shift_c = _staff_col(cols, "shift", exclude=used)
+    used.add(shift_c)
+    people_c = _staff_col(cols, "people", exclude=used)
+    used.add(people_c)
+    dates = _parse_dates(df[date_c])[0].dt.normalize()
+
+    if role_c is None:  # table: every other numeric column is a role with a head count
+        role_cols = [c for c in cols if c not in used and _numeric_share(df, c) >= 0.5]
+        if not role_cols:
+            return None, "no role column and no columns with numbers of people"
+        long = df[[date_c] + ([shift_c] if shift_c else []) + role_cols].copy()
+        long["__date"] = dates
+        long = long.melt(id_vars=["__date"] + ([shift_c] if shift_c else []), value_vars=role_cols,
+                         var_name="role", value_name="people")
+        long["people"] = parse_numbers(long["people"])
+        base = pd.DataFrame({"date": long["__date"], "role": long["role"].astype(str), "people": long["people"]})
+        shift_text = long[shift_c] if shift_c else None
+        start = end = None
+    else:
+        base = pd.DataFrame({"date": dates, "role": df[role_c].astype(str).str.strip(),
+                             "people": parse_numbers(df[people_c]) if people_c else 1.0})
+        shift_text = df[shift_c] if shift_c else None
+        start = _clock_hours(df[start_c]) if start_c else None
+        end = _clock_hours(df[end_c]) if end_c else None
+
+    rows = []
+    for i in range(len(base)):
+        shifts = None
+        if start is not None and pd.notna(start.iloc[i]):
+            s = float(start.iloc[i])
+            e = float(end.iloc[i]) if end is not None and pd.notna(end.iloc[i]) else s + 4.0
+            e = e + 24.0 if e <= s else e
+            shifts = [name for name, (w0, w1) in SHIFT_WINDOWS.items() if min(e, w1) - max(s, w0) >= MIN_OVERLAP_HOURS]
+        elif shift_text is not None:
+            word = _norm(shift_text.iloc[i])
+            shifts = next((["lunch", "dinner"] if key == "both" else [key]
+                           for key, words in _SHIFT_WORDS.items() if word in words or set(word.split()) & words), None)
+        if shifts is None:
+            shifts = ["lunch", "dinner"]  # no time or shift given: the person is there all day
+        for sh in shifts:
+            rows.append((base["date"].iloc[i], sh, base["role"].iloc[i], base["people"].iloc[i]))
+    out = pd.DataFrame(rows, columns=["date", "shift", "role", "people"]).dropna(subset=["date", "people"])
+    out = out[out["people"] > 0]
+    if out.empty:
+        return None, "no usable rows"
+    out = out.groupby(["date", "shift", "role"], as_index=False)["people"].sum()
+    return out.sort_values(["date", "shift", "role"]).reset_index(drop=True), None
+
+
+def staffing_reality(actual, guests, roles, lunch_share, weekend_lunch_share=None, shift_hours=None,
+                     backtest=None, intervals=None, plan_for="expected"):
+    """Compare who really worked with the staff rule and with TableCast.
+
+    actual: parse_staff_file rows. guests: real guests per day (Series indexed by date).
+    Only shifts that appear in the staff file are compared (no rows for a shift = no data, not 'nobody').
+    Returns None, or a dict with the restaurant's real guests per person, how often they were short /
+    overstaffed by their own rule (and the wages that cost), and TableCast on the same shifts."""
+    roles = clean_roles(roles)
+    if actual is None or len(actual) == 0 or not roles or guests is None or len(guests) == 0:
+        return None
+    hours = {**DEFAULT_SHIFT_HOURS, **(shift_hours or {})}
+    act = actual.assign(match=actual["role"].map(lambda n: match_role(n, roles)))
+    unmatched = sorted(act.loc[act["match"].isna(), "role"].unique().tolist())
+    act = act.dropna(subset=["match"])
+    guests = guests[guests > 0]
+    guests.index = pd.DatetimeIndex(guests.index).normalize()
+    days = pd.DatetimeIndex(sorted(set(act["date"]) & set(guests.index)))
+    if len(days) == 0:
+        return {"shifts": 0, "unmatched": unmatched}
+    lunch_g, dinner_g = split_shifts(guests.loc[days].to_numpy(), days, lunch_share, weekend_lunch_share)
+    need = shift_staff(lunch_g, dinner_g, roles)
+    have = act.groupby(["date", "shift", "match"])["people"].sum()
+    present = set(zip(act["date"], act["shift"]))
+    wages = {r["name"]: r["wage"] for r in roles}
+
+    sched = None  # TableCast's plan, written each Sunday for the week ahead (as in staffing_outcomes)
+    if backtest is not None and len(backtest):
+        bt = backtest[backtest["horizon"] == pd.to_datetime(backtest["date"]).dt.dayofweek + 1]
+        bt = bt.set_index(pd.to_datetime(bt["date"]).dt.normalize())
+        common = days.intersection(bt.index)
+        if len(common):
+            pred = bt.loc[common, "pred"].to_numpy(dtype=float)
+            if plan_for == "busy" and intervals is not None:
+                pred = pred * np.array([intervals[int(h)][1] for h in bt.loc[common, "horizon"]])
+            sched = (common, shift_staff(*split_shifts(pred, common, lunch_share, weekend_lunch_share), roles))
+
+    ratios = {r["name"]: [] for r in roles}
+    real = {"short": 0, "over": 0, "extra_cost": 0.0, "missing_hours": 0.0}
+    same = {"shifts": 0, "real_short": 0, "real_over": 0, "real_extra_cost": 0.0,
+            "tc_short": 0, "tc_over": 0, "tc_extra_cost": 0.0}
+    n_shifts = 0
+    sched_pos = {d: i for i, d in enumerate(sched[0])} if sched else {}
+    for i, d in enumerate(days):
+        for shift, g in (("lunch", lunch_g[i]), ("dinner", dinner_g[i])):
+            if (d, shift) not in present or g <= 0:
+                continue
+            n_shifts += 1
+            got = {r["name"]: float(have.get((d, shift, r["name"]), 0.0)) for r in roles}
+            needed = {r["name"]: float(need[shift][r["name"]][i]) for r in roles}
+            for r in roles:
+                if got[r["name"]] > 0 and r["shift"] in ("both", shift):
+                    ratios[r["name"]].append(g / got[r["name"]])
+            diff = {k: got[k] - needed[k] for k in got}
+            short = any(v < 0 for v in diff.values())
+            over = not short and any(v > 0 for v in diff.values())
+            cost = sum(max(v, 0) * hours[shift] * wages[k] for k, v in diff.items())
+            real["short"] += short
+            real["over"] += over
+            real["extra_cost"] += cost
+            real["missing_hours"] += sum(max(-v, 0) * hours[shift] for v in diff.values())
+            if d in sched_pos:
+                planned = {r["name"]: float(sched[1][shift][r["name"]][sched_pos[d]]) for r in roles}
+                tdiff = {k: planned[k] - needed[k] for k in planned}
+                t_short = any(v < 0 for v in tdiff.values())
+                same["shifts"] += 1
+                same["real_short"] += short
+                same["real_over"] += over
+                same["real_extra_cost"] += cost
+                same["tc_short"] += t_short
+                same["tc_over"] += not t_short and any(v > 0 for v in tdiff.values())
+                same["tc_extra_cost"] += sum(max(v, 0) * hours[shift] * wages[k] for k, v in tdiff.items())
+    return {"shifts": n_shifts, "days": len(days), "unmatched": unmatched,
+            "ratios": {k: float(np.median(v)) for k, v in ratios.items() if v},
+            "real": real, "same": same if same["shifts"] else None}
+
+
 def feature_columns(ctx, weather_ok):
     """Which feature columns a model trains on, given the options and the data available."""
     opts = ctx.options

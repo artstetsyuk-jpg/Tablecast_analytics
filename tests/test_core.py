@@ -99,6 +99,54 @@ def test_a_saved_format_is_used_and_a_wrong_one_is_ignored():
     assert not core.format_fits({**custom, "count_col": "gone"}, df.columns)
 
 
+STAFF_ROLES = [{"name": "Kellner", "per": 20, "min": 1, "wage": 14.0}, {"name": "Köche", "per": 40, "min": 1, "wage": 16.0}]
+
+
+def test_staff_file_layouts_are_read_into_shifts():
+    clock = ("Datum;Name;Bereich;Kommen;Gehen\n07.11.2026;Anna;Service;10:30;15:30\n07.11.2026;Ben;Service;16:30;22:30\n"
+             "07.11.2026;Cem;Küche;10:00;22:00\n").encode("utf-8")
+    rows, err = core.parse_staff_file(clock)
+    assert err is None
+    got = {(r.shift, r.role): r.people for r in rows.itertuples()}
+    assert got == {("lunch", "Service"): 1, ("dinner", "Service"): 1, ("lunch", "Küche"): 1, ("dinner", "Küche"): 1}
+
+    shifts = b"date,shift,role,people\n2026-11-07,Mittag,Kellner,2\n2026-11-07,Abend,Kellner,3\n2026-11-07,Abend,Koch,2\n"
+    rows, err = core.parse_staff_file(shifts)
+    assert err is None and rows["people"].sum() == 7 and set(rows["shift"]) == {"lunch", "dinner"}
+
+    table = "Datum;Kellner;Köche\n07.11.2026;4;2\n".encode("utf-8")
+    rows, err = core.parse_staff_file(table)
+    assert err is None and len(rows) == 4          # no shift given: everyone counts for lunch and dinner
+    assert core.parse_staff_file(b"foo,bar\nx,y\n")[1] is not None
+
+
+def test_role_names_are_matched_to_the_staff_settings():
+    assert core.match_role("Service", STAFF_ROLES) == "Kellner"
+    assert core.match_role("Küche", STAFF_ROLES) == "Köche"
+    assert core.match_role("kellner", STAFF_ROLES) == "Kellner"
+    assert core.match_role("Reinigung", STAFF_ROLES) is None
+
+
+def test_staffing_reality_compares_real_staff_with_the_rule_and_tablecast():
+    days = pd.to_datetime(["2026-11-02", "2026-11-03"])          # Monday, Tuesday: 40 / 60 guests at 40% lunch
+    guests = pd.Series([100.0, 100.0], index=days)
+    actual = pd.DataFrame({"date": [days[0]] * 4 + [days[1]] * 2,
+                           "shift": ["lunch", "lunch", "dinner", "dinner", "lunch", "lunch"],
+                           "role": ["Service", "Küche", "Service", "Küche", "Service", "Küche"],
+                           "people": [4, 1, 3, 2, 1, 1]})
+    bt = pd.DataFrame({"date": days, "horizon": [1, 2], "actual": [100.0, 100.0], "pred": [100.0, 100.0],
+                       "base": [100.0, 100.0]})
+    out = core.staffing_reality(actual, guests, STAFF_ROLES, 40, 40, {"lunch": 5, "dinner": 6}, backtest=bt)
+    # needed: lunch 40 -> 2 Kellner, 1 Koch; dinner 60 -> 3 Kellner, 2 Köche
+    assert out["shifts"] == 3                                   # Tuesday dinner is not in the file
+    assert out["real"]["over"] == 1 and out["real"]["short"] == 1  # Mon lunch 4 waiters; Tue lunch 1 waiter
+    assert out["real"]["extra_cost"] == 2 * 5 * 14.0
+    assert out["ratios"]["Kellner"] == 20.0                     # median of 40/4, 60/3, 40/1
+    # TableCast (perfect forecast here) on the same 3 shifts: never short, never over
+    assert out["same"]["shifts"] == 3 and out["same"]["tc_short"] == 0 and out["same"]["tc_over"] == 0
+    assert out["same"]["real_extra_cost"] == out["real"]["extra_cost"]
+
+
 def test_features_only_use_the_past():
     """Changing a day's own visitor count must not change that day's features (no leakage)."""
     idx = pd.date_range("2025-01-01", periods=60)

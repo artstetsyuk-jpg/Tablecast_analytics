@@ -271,6 +271,25 @@ def test_sales_only_export_forecasts_sales_and_estimates_guests(account, monkeyp
     assert "Guests (estimated) · next 7 days" in text and "Forecast from your sales history" in text
 
 
+def test_staff_upload_compares_who_really_worked(account, monkeypatch):
+    days = [date.today() - timedelta(days=k) for k in range(1, 40)]
+    lines = ["Datum;Name;Bereich;Kommen;Gehen"]
+    for d in days:
+        ds = d.strftime("%d.%m.%Y")
+        lines += [f"{ds};A;Service;10:30;15:00", f"{ds};B;Service;10:30;15:00", f"{ds};C;Service;16:30;22:30",
+                  f"{ds};D;Service;16:30;22:30", f"{ds};E;Küche;10:00;22:00"]
+    data = "\n".join(lines).encode("utf-8")
+    real_uploader = streamlit.file_uploader
+    monkeypatch.setattr(streamlit, "file_uploader", lambda *a, **k: FakeUpload(data)
+                        if str(k.get("key", "")).startswith("staff_upload") else real_uploader(*a, **k))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert "Shifts compared" in labels and "Short by your rule" in labels
+    assert storage.load_staff(account) is not None                    # saved for the restaurant
+    assert any("Use my real numbers" == b.label for b in at.button)
+
+
 def test_recipe_upload_fills_the_prep_list(account, monkeypatch):
     recipe = b"dish;share;ingredient;amount;unit;pack\nBurger;40%;Buns;1;pcs;12\nBurger;40%;Beef;0.2;kg;\n"
     real_uploader = streamlit.file_uploader
