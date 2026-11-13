@@ -90,6 +90,21 @@ def test_calendar_export_has_stable_ids():
     assert uid and uid == [line for line in second.decode().splitlines() if line.startswith("UID:")]
 
 
+def test_week_plan_and_pdf_show_staff_per_role():
+    import core
+    from i18n import DAY_TRANSLATIONS, MONTH_TRANSLATIONS, TRANSLATIONS
+    roles = [{"name": "Waiters", "per": 20, "min": 1, "wage": 14.0}, {"name": "Cooks", "per": 40, "min": 1, "wage": 16.0}]
+    preds = pd.Series([100.0, float("nan")], index=pd.to_datetime(["2025-03-03", "2025-03-04"]))
+    plan = core.build_plan(preds, None, pd.Timestamp("2025-03-02"), None, 0, 40, 25.0, 15, roles=roles)
+    t = TRANSLATIONS["English"]
+    headers, table, pdf_rows = reports.format_plan(plan, t, DAY_TRANSLATIONS["English"], MONTH_TRANSLATIONS["English"],
+                                                   show_range=False)
+    assert headers[-2:] == ["Waiters", "Cooks"] and t["col_servers"] not in headers
+    assert table[0]["Waiters"] == "2 / 3" and table[0]["Cooks"] == "1 / 2"   # lunch 40 / dinner 60
+    assert table[1]["Waiters"] == "-"                                       # closed day
+    assert reports.build_pdf("Week", ["line"], headers, pdf_rows).startswith(b"%PDF")
+
+
 def test_pdf_is_generated():
     pdf = reports.build_pdf("Report – Café", ["line"], ["A", "B"], [["1", "2"]])
     assert pdf.startswith(b"%PDF")

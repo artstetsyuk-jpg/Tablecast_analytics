@@ -949,6 +949,8 @@ with tab_plan:
             rev_col: st.column_config.NumberColumn(rev_col, format=f"{currency}%.2f"),
         },
     )
+    if current_roles():
+        st.caption(L["plan_staff_note"])
     if show_range:
         st.caption(t["range_caption"])
     if bundle["closed_weekdays"]:

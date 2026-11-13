@@ -886,6 +886,7 @@ _STAFF_TEXT = {
     "English": {
         "tab_staff": "Staff",
         "staff_settings": "Staff settings",
+        "plan_staff_note": "Staff per role as lunch / dinner (3 / 4 = 3 at lunch, 4 at dinner). Roles and how many guests each person handles are set in the Staff tab.",
         "staff_caption": "Who works a shift and how many guests one person handles in that shift. "
                          "TableCast turns the forecast into people per role, hours and labour cost.",
         "role_waiters": "Waiters", "role_cooks": "Cooks", "role_bartenders": "Bartenders",
@@ -943,6 +944,7 @@ _STAFF_TEXT = {
     "German": {
         "tab_staff": "Personal",
         "staff_settings": "Personal-Einstellungen",
+        "plan_staff_note": "Personal pro Rolle als Mittag / Abend (3 / 4 = 3 mittags, 4 abends). Rollen und wie viele Gäste eine Person schafft, stellen Sie im Tab Personal ein.",
         "staff_caption": "Wer in einer Schicht arbeitet und wie viele Gäste eine Person pro Schicht schafft. "
                          "TableCast macht aus der Prognose Personen pro Rolle, Stunden und Personalkosten.",
         "role_waiters": "Service", "role_cooks": "Köche", "role_bartenders": "Bar",
@@ -999,6 +1001,7 @@ _STAFF_TEXT = {
     "French": {
         "tab_staff": "Personnel",
         "staff_settings": "Réglages du personnel",
+        "plan_staff_note": "Personnel par poste en midi / soir (3 / 4 = 3 le midi, 4 le soir). Les postes et le nombre de clients par personne se règlent dans l'onglet Personnel.",
         "staff_caption": "Qui travaille pendant un service et combien de clients une personne gère par service. "
                          "TableCast transforme la prévision en personnes par poste, heures et coût salarial.",
         "role_waiters": "Serveurs", "role_cooks": "Cuisiniers", "role_bartenders": "Barmans",

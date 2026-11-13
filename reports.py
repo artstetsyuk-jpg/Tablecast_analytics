@@ -25,7 +25,9 @@ def format_plan(plan, t, days, months, show_range, currency="€"):
     headers = [t["col_date"], t["col_traffic"]]
     if show_range:
         headers.append(t["col_range"])
-    headers += [t["col_shift"], rev_header, t["col_servers"]]
+    # One column per role ("3 / 4" = lunch / dinner) when the plan has roles; otherwise the old total.
+    roles = next((list(r["staff"]["lunch"]) for r in plan if r.get("staff")), [])
+    headers += [t["col_shift"], rev_header] + (roles or [t["col_servers"]])
 
     table_rows, pdf_rows = [], []
     for row in plan:
@@ -51,8 +53,16 @@ def format_plan(plan, t, days, months, show_range, currency="€"):
             pdf_row.append(range_text)
         record[t["col_shift"]] = shift_text
         record[rev_header] = row["revenue"]
-        record[t["col_servers"]] = servers_text
-        pdf_row += [shift_text, f"{row['revenue']:,.2f} {currency}".strip(), servers_text]
+        pdf_row += [shift_text, f"{row['revenue']:,.2f} {currency}".strip()]
+        if roles:
+            for name in roles:
+                cell = "-" if row["is_closed"] else (
+                    f"{row['staff']['lunch'].get(name, 0)} / {row['staff']['dinner'].get(name, 0)}")
+                record[name] = cell
+                pdf_row.append(cell)
+        else:
+            record[t["col_servers"]] = servers_text
+            pdf_row.append(servers_text)
         table_rows.append(record)
         pdf_rows.append(pdf_row)
     return headers, table_rows, pdf_rows
@@ -122,7 +132,13 @@ def build_pdf(title, summary_lines, headers, rows):
         pdf.cell(0, 8, _latin1(line), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C", fill=True)
     pdf.ln(8)
 
-    shares = PDF_SHARES.get(len(headers)) or [1 / len(headers)] * len(headers)
+    shares = PDF_SHARES.get(len(headers))
+    if shares is None:  # roles as columns: date and shift split get more room than the small number columns
+        weights = [1.8 if i == 0 else 1.0 for i in range(len(headers))]
+        for i in range(len(headers)):  # the "Lunch: 40 | Dinner: 60" column
+            if any("|" in str(r[i]) for r in rows if i < len(r)):
+                weights[i] = 1.9
+        shares = [w / sum(weights) for w in weights]
     widths = [pdf.epw * share for share in shares]
     pdf.set_font("Helvetica", "B", 8)
     for width, header in zip(widths, headers):
