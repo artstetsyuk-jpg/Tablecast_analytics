@@ -42,6 +42,63 @@ def test_clean_visits_rejects_short_history_and_missing_columns():
 
 
 # ---------------------------------------------------------------- features
+def test_numbers_as_tills_write_them():
+    parse = lambda vals: core.parse_numbers(pd.Series(vals)).tolist()  # noqa: E731
+    assert parse(["1.240", "980", "1.512", "2.003"]) == [1240, 980, 1512, 2003]   # German thousands
+    assert parse(["1.24", "2.5", "3.75"]) == [1.24, 2.5, 3.75]
+    assert parse(["1,240.50", "€ 1.240,50", "12,5", "1'240.50"]) == [1240.5, 1240.5, 12.5, 1240.5]
+
+
+def test_daily_report_with_title_lines_checks_and_sales():
+    raw = ("Tagesbericht Filiale 1\nZeitraum: 01.11.2026 - 03.11.2026\n\n"
+           "Datum;Anzahl Belege;Umsatz brutto\n01.11.2026;76;1.240,50\n02.11.2026;80;1.302,10\n"
+           "03.11.2026;71;998,00\n").encode("latin-1")
+    df = core.read_csv_bytes(raw)
+    fmt = core.detect_format(df)
+    assert (fmt["kind"], fmt["date_col"], fmt["count_col"], fmt["unit"], fmt["revenue_col"]) == (
+        "daily", "datum", "anzahl belege", "checks", "umsatz brutto")
+    clean, _, err = core.clean_visits(df, min_days=1, fmt=fmt)
+    assert err is None
+    assert clean["visitors"].tolist() == [76, 80, 71] and clean["revenue"].tolist() == [1240.5, 1302.1, 998.0]
+    assert clean["visit_date"].iloc[0] == pd.Timestamp("2026-11-01")
+
+
+def test_sales_only_file_forecasts_sales():
+    df = core.read_csv_bytes(b"date,umsatz\n2026-11-01,1240.5\n2026-11-02,980\n")
+    fmt = core.detect_format(df)
+    assert fmt["unit"] == "sales" and fmt["count_col"] is None and core.is_money_unit(fmt)
+    clean, _, err = core.clean_visits(df, min_days=1)
+    assert err is None and clean["visitors"].tolist() == [1240.5, 980.0] and "revenue" not in clean
+
+
+def test_receipt_journal_counts_bills_once_and_adds_item_amounts():
+    raw = ("Zeit;Beleg Nr;Artikel;Betrag\n07.11.2026 12:14;4711;Schnitzel;18,50\n07.11.2026 12:14;4711;Cola;4,20\n"
+           "07.11.2026 19:02;4790;Steak;29,00\n08.11.2026 12:30;4801;Suppe;6,50\n").encode("utf-8")
+    df = core.read_csv_bytes(raw)
+    fmt = core.detect_format(df)
+    assert (fmt["kind"], fmt["receipt_col"], fmt["unit"], fmt["revenue_col"]) == ("receipts", "beleg nr", "checks", "betrag")
+    clean, _, err = core.clean_visits(df, min_days=1, fmt=fmt)
+    assert err is None
+    assert clean["visitors"].tolist() == [2, 1]                 # bills, not items
+    assert clean["revenue"].round(2).tolist() == [51.7, 6.5]
+
+
+def test_a_count_that_looks_like_sales_gets_a_warning():
+    days = pd.date_range("2026-01-01", periods=70)
+    df = pd.DataFrame({"date": days.strftime("%Y-%m-%d"), "visitors": 1300.0})
+    clean, notes, err = core.clean_visits(df)
+    assert err is None and any(key == "warn_looks_like_sales" for _, key, _ in notes)
+
+
+def test_a_saved_format_is_used_and_a_wrong_one_is_ignored():
+    df = core.read_csv_bytes(b"tag;kasse a;kasse b\n01.11.2026;40;55\n02.11.2026;42;60\n")
+    custom = {"kind": "daily", "date_col": "tag", "count_col": "kasse b", "unit": "custom", "unit_name": "Tische",
+              "revenue_col": None, "receipt_col": None}
+    clean, _, err = core.clean_visits(df, min_days=1, fmt=custom)
+    assert err is None and clean["visitors"].tolist() == [55, 60]
+    assert not core.format_fits({**custom, "count_col": "gone"}, df.columns)
+
+
 def test_features_only_use_the_past():
     """Changing a day's own visitor count must not change that day's features (no leakage)."""
     idx = pd.date_range("2025-01-01", periods=60)

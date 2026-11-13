@@ -1061,3 +1061,172 @@ for _lang, _text in {"English": "Staff needed", "German": "Benötigtes Personal"
 UI_LABELS["English"]["f_subdiv"] = "State (holidays & school holidays)"
 UI_LABELS["German"]["f_subdiv"] = "Bundesland (Feiertage & Schulferien)"
 UI_LABELS["French"]["f_subdiv"] = "Région (jours fériés & vacances scolaires)"
+
+
+# ----------------------------------------------------------------------------
+# What a restaurant's file counts: the app uses the file's own word everywhere
+# ----------------------------------------------------------------------------
+# (Plural, plural in a sentence, Singular, singular in a sentence)
+UNIT_WORDS = {
+    "English": {"guests": ("Guests", "guests", "Guest", "guest"), "checks": ("Checks", "checks", "Check", "check"),
+                "orders": ("Orders", "orders", "Order", "order")},
+    "German": {"guests": ("Gäste", "Gäste", "Gast", "Gast"), "checks": ("Bons", "Bons", "Bon", "Bon"),
+               "orders": ("Bestellungen", "Bestellungen", "Bestellung", "Bestellung")},
+    "French": {"guests": ("Clients", "clients", "Client", "client"), "checks": ("Tickets", "tickets", "Ticket", "ticket"),
+               "orders": ("Commandes", "commandes", "Commande", "commande")},
+}
+SALES_WORD = {"English": "Sales", "German": "Umsatz", "French": "Chiffre d'affaires"}
+# Guest words in the existing texts and which form replaces them (index into UNIT_WORDS tuples)
+_GUEST_WORDS = {
+    "English": [("Guests", 0), ("guests", 1), ("Guest", 2), ("guest", 3), ("Visitors", 0), ("visitors", 1),
+                ("Visitor", 2), ("visitor", 3), ("Traffic", 0), ("traffic", 1)],
+    "German": [("Gästen", 1), ("Gäste", 0), ("Gast", 2), ("Besucher", 0)],
+    "French": [("Clients", 0), ("clients", 1), ("Client", 2), ("client", 3), ("Visiteurs", 0), ("visiteurs", 1),
+               ("Trafic", 0), ("trafic", 1)],
+}
+# Headings that read badly with a plain word swap get their own template ({U} = plural)
+_UNIT_TEMPLATES = {
+    "English": {"main_chart_header": "{U}: actual vs predicted (last 30 days of the test period)",
+                "dow_header": "📊 {U} on average by day of the week", "legend_actual": "Actual",
+                "col_traffic": "Expected {u}"},
+    "German": {"main_chart_header": "{U}: tatsächlich vs. prognostiziert (letzte 30 Tage der Testperiode)",
+               "dow_header": "📊 {U} im Schnitt nach Wochentag", "legend_actual": "Tatsächlich",
+               "col_traffic": "{U} (erwartet)"},
+    "French": {"main_chart_header": "{U} : réel vs prévu (30 derniers jours de la période de test)",
+               "dow_header": "📊 {U} en moyenne par jour de la semaine", "legend_actual": "Réel",
+               "col_traffic": "{U} (prévision)"},
+}
+_EST = {"English": "Guests (estimated)", "German": "Gäste (geschätzt)", "French": "Clients (estimés)"}
+
+
+def unit_words(lang, unit, unit_name=""):
+    if unit == "sales":
+        return (SALES_WORD[lang],) * 4
+    if unit == "custom" and str(unit_name).strip():
+        n = str(unit_name).strip()
+        return (n[:1].upper() + n[1:], n, n[:1].upper() + n[1:], n)
+    return UNIT_WORDS[lang].get(unit, UNIT_WORDS[lang]["guests"])
+
+
+def unit_labels(t, labels, lang, unit, unit_name=""):
+    """Copies of the two label dicts with the restaurant's own unit (Bons, Bestellungen, ...)."""
+    import re
+    t, labels = dict(t), dict(labels)
+    if unit == "sales":  # the forecast is in money; staff and prep use guests estimated from it
+        word = SALES_WORD[lang]
+        for key, tpl in _UNIT_TEMPLATES[lang].items():
+            target = t if key in t else labels
+            target[key] = tpl.format(U=word, u=word)
+        t["col_traffic"] = _EST[lang]
+        labels["kpi_guests"] = labels["kpi_guests_est"]
+        return t, labels
+    words = unit_words(lang, unit, unit_name)
+    if unit != "guests":
+        for src in (t, labels):
+            for key, value in src.items():
+                if isinstance(value, str):
+                    for word, form in _GUEST_WORDS[lang]:
+                        value = re.sub(rf"\b{word}\b", words[form], value)
+                    src[key] = value
+        t["unit_people"] = words[1]
+    for key, tpl in _UNIT_TEMPLATES[lang].items():
+        target = t if key in t else labels
+        target[key] = tpl.format(U=words[0], u=words[1])
+    return t, labels
+
+
+_FORMAT_TEXT = {
+    "English": {
+        "fmt_title": "How we read your file",
+        "fmt_intro": "We guessed how to read your till export. Please check once; it is remembered for this restaurant.",
+        "fmt_kind": "Each row is", "kind_daily": "one day", "kind_receipts": "one receipt or item (receipt list)",
+        "fmt_date": "Date column", "fmt_count": "Count column", "fmt_count_none_daily": "(none: my file only has sales)",
+        "fmt_count_none_receipts": "(count the receipts)", "fmt_unit": "What does it count?",
+        "unit_opt_guests": "Guests", "unit_opt_checks": "Checks / receipts", "unit_opt_orders": "Orders",
+        "unit_opt_custom": "Something else (type a name)", "fmt_unit_name": "Name (e.g. tables)",
+        "fmt_revenue": "Sales column", "fmt_none": "(none)", "fmt_receipt": "Receipt number column",
+        "fmt_receipt_none": "(every row is its own receipt)",
+        "fmt_save": "Save this format", "fmt_saved": "Saved: every upload for this restaurant is read this way.",
+        "fmt_unsaved": "Not saved yet. Save it so future uploads are read the same way.",
+        "fmt_mismatch": "This file's columns don't match the saved format. Please check how we read it.",
+        "fmt_unit_changed": "Your saved history counts {old}, this file counts {new}. Mixing them makes the forecast wrong.",
+        "fmt_summary_count": "Forecasting **{unit}** from column '{col}'.",
+        "fmt_summary_receipts": "Forecasting **{unit}** per day from a receipt list.",
+        "fmt_summary_sales": "Forecasting **sales** from column '{col}'. Staff and prep use guests estimated from it.",
+        "fmt_summary_revenue": "Sales are forecast separately from column '{col}'.",
+        "kpi_guests_est": "Guests (estimated) · next 7 days",
+        "kpi_guests_est_sub": "From sales at {s} per guest (Service & pricing)",
+        "kpi_rev_model": "Forecast from your sales history",
+        "kpi_rev_model_avg": "Forecast from your sales history · {s} per {unit} on average",
+        "acc_money": "±{n}",
+    },
+    "German": {
+        "fmt_title": "So lesen wir Ihre Datei",
+        "fmt_intro": "Wir haben erraten, wie Ihr Kassen-Export aufgebaut ist. Bitte einmal prüfen; es wird für dieses Lokal gespeichert.",
+        "fmt_kind": "Jede Zeile ist", "kind_daily": "ein Tag", "kind_receipts": "ein Bon oder Artikel (Belegjournal)",
+        "fmt_date": "Datumsspalte", "fmt_count": "Zählspalte", "fmt_count_none_daily": "(keine: meine Datei hat nur Umsatz)",
+        "fmt_count_none_receipts": "(Bons zählen)", "fmt_unit": "Was wird gezählt?",
+        "unit_opt_guests": "Gäste", "unit_opt_checks": "Bons / Belege", "unit_opt_orders": "Bestellungen",
+        "unit_opt_custom": "Etwas anderes (Namen eingeben)", "fmt_unit_name": "Name (z. B. Tische)",
+        "fmt_revenue": "Umsatzspalte", "fmt_none": "(keine)", "fmt_receipt": "Spalte mit der Bon-Nummer",
+        "fmt_receipt_none": "(jede Zeile ist ein eigener Bon)",
+        "fmt_save": "Format speichern", "fmt_saved": "Gespeichert: jeder Upload dieses Lokals wird so gelesen.",
+        "fmt_unsaved": "Noch nicht gespeichert. Speichern, damit künftige Uploads gleich gelesen werden.",
+        "fmt_mismatch": "Die Spalten dieser Datei passen nicht zum gespeicherten Format. Bitte prüfen, wie wir sie lesen.",
+        "fmt_unit_changed": "Ihre gespeicherte Historie zählt {old}, diese Datei zählt {new}. Gemischt wird die Prognose falsch.",
+        "fmt_summary_count": "Prognose für **{unit}** aus der Spalte '{col}'.",
+        "fmt_summary_receipts": "Prognose für **{unit}** pro Tag aus einem Belegjournal.",
+        "fmt_summary_sales": "Prognose für den **Umsatz** aus der Spalte '{col}'. Personal und Vorbereitung nutzen daraus geschätzte Gäste.",
+        "fmt_summary_revenue": "Der Umsatz wird separat aus der Spalte '{col}' prognostiziert.",
+        "kpi_guests_est": "Gäste (geschätzt) · nächste 7 Tage",
+        "kpi_guests_est_sub": "Aus dem Umsatz bei {s} pro Gast (Service & Preise)",
+        "kpi_rev_model": "Prognose aus Ihrem bisherigen Umsatz",
+        "kpi_rev_model_avg": "Prognose aus Ihrem bisherigen Umsatz · im Schnitt {s} pro {unit}",
+        "acc_money": "±{n}",
+    },
+    "French": {
+        "fmt_title": "Comment nous lisons votre fichier",
+        "fmt_intro": "Nous avons deviné la structure de votre export de caisse. Vérifiez une fois ; c'est mémorisé pour ce restaurant.",
+        "fmt_kind": "Chaque ligne est", "kind_daily": "un jour", "kind_receipts": "un ticket ou un article (journal des tickets)",
+        "fmt_date": "Colonne date", "fmt_count": "Colonne à compter", "fmt_count_none_daily": "(aucune : mon fichier n'a que le CA)",
+        "fmt_count_none_receipts": "(compter les tickets)", "fmt_unit": "Que compte-t-elle ?",
+        "unit_opt_guests": "Clients", "unit_opt_checks": "Tickets / additions", "unit_opt_orders": "Commandes",
+        "unit_opt_custom": "Autre chose (saisir un nom)", "fmt_unit_name": "Nom (p. ex. tables)",
+        "fmt_revenue": "Colonne chiffre d'affaires", "fmt_none": "(aucune)", "fmt_receipt": "Colonne numéro de ticket",
+        "fmt_receipt_none": "(chaque ligne est un ticket)",
+        "fmt_save": "Enregistrer ce format", "fmt_saved": "Enregistré : chaque import de ce restaurant est lu ainsi.",
+        "fmt_unsaved": "Pas encore enregistré. Enregistrez-le pour que les prochains imports soient lus pareil.",
+        "fmt_mismatch": "Les colonnes de ce fichier ne correspondent pas au format enregistré. Vérifiez la lecture.",
+        "fmt_unit_changed": "Votre historique compte des {old}, ce fichier compte des {new}. Les mélanger fausse la prévision.",
+        "fmt_summary_count": "Prévision des **{unit}** depuis la colonne « {col} ».",
+        "fmt_summary_receipts": "Prévision des **{unit}** par jour depuis un journal des tickets.",
+        "fmt_summary_sales": "Prévision du **chiffre d'affaires** depuis la colonne « {col} ». Personnel et préparation utilisent des clients estimés.",
+        "fmt_summary_revenue": "Le chiffre d'affaires est prévu séparément depuis la colonne « {col} ».",
+        "kpi_guests_est": "Clients (estimés) · 7 prochains jours",
+        "kpi_guests_est_sub": "Depuis le CA à {s} par client (Service & prix)",
+        "kpi_rev_model": "Prévu depuis votre historique de CA",
+        "kpi_rev_model_avg": "Prévu depuis votre historique de CA · {s} par {unit} en moyenne",
+        "acc_money": "±{n}",
+    },
+}
+for _lang, _text in _FORMAT_TEXT.items():
+    UI_LABELS[_lang].update(_text)
+_T_FORMAT = {
+    "English": {"req_format": "**What to upload:** an export from your till, one row per day or per receipt, with a "
+                              "date plus guests, receipts or sales. Title lines and 1.240,50-style numbers are fine.",
+                "err_columns": "⚠️ We couldn't find a date and a number to forecast in this file. Check 'How we read your file'.",
+                "warn_looks_like_sales": "A normal day in this file is about {n}. That looks like sales or items sold, "
+                                         "not people. If so, set it in 'How we read your file'."},
+    "German": {"req_format": "**Was hochladen:** einen Export aus Ihrer Kasse, eine Zeile pro Tag oder pro Bon, mit "
+                             "Datum und Gästen, Bons oder Umsatz. Titelzeilen und Zahlen wie 1.240,50 sind kein Problem.",
+               "err_columns": "⚠️ In dieser Datei wurden kein Datum und keine Zahl zum Prognostizieren gefunden. Bitte 'So lesen wir Ihre Datei' prüfen.",
+               "warn_looks_like_sales": "Ein normaler Tag in dieser Datei hat etwa {n}. Das sieht nach Umsatz oder "
+                                        "verkauften Artikeln aus, nicht nach Personen. Dann bitte unter 'So lesen wir Ihre Datei' einstellen."},
+    "French": {"req_format": "**Quoi importer :** un export de votre caisse, une ligne par jour ou par ticket, avec une "
+                             "date et des clients, tickets ou un chiffre d'affaires. Lignes de titre et nombres 1.240,50 acceptés.",
+               "err_columns": "⚠️ Aucune date ni aucun nombre à prévoir trouvés dans ce fichier. Vérifiez « Comment nous lisons votre fichier ».",
+               "warn_looks_like_sales": "Un jour normal dans ce fichier vaut environ {n}. Cela ressemble à un chiffre "
+                                        "d'affaires ou à des articles vendus, pas à des personnes. Réglez-le dans « Comment nous lisons votre fichier »."},
+}
+for _lang, _text in _T_FORMAT.items():
+    TRANSLATIONS[_lang].update(_text)

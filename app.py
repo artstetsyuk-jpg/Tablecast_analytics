@@ -59,6 +59,8 @@ from i18n import (
     MONTH_TRANSLATIONS,
     TRANSLATIONS,
     UI_LABELS,
+    unit_labels,
+    unit_words,
 )
 
 BRAND = "TableCast"
@@ -472,6 +474,93 @@ with st.sidebar.expander(L["sec_data"], expanded=saved_visits is None):
     st.caption(t["req_format"])
     st.caption(L["events_csv_hint"])
 
+# --- How we read the file: guessed on upload, confirmed once, saved per restaurant ---
+saved_format = settings.get("data_format") or None
+upload_raw = None
+if uploaded_file is not None:
+    try:
+        upload_raw = cached_read_csv(uploaded_file.getvalue())
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, csv.Error):
+        upload_raw = None  # reported below
+
+
+def format_summary(fmt):
+    unit_word = unit_words(selected_lang, fmt.get("unit"), fmt.get("unit_name"))[0]
+    if fmt.get("unit") == "sales":
+        text = L["fmt_summary_sales"].format(col=fmt.get("revenue_col"))
+    elif fmt.get("kind") == "receipts":
+        text = L["fmt_summary_receipts"].format(unit=unit_word)
+    else:
+        text = L["fmt_summary_count"].format(unit=unit_word, col=fmt.get("count_col"))
+    if fmt.get("revenue_col") and fmt.get("unit") != "sales":
+        text += " " + L["fmt_summary_revenue"].format(col=fmt["revenue_col"])
+    return text
+
+
+def format_editor(df, guess, fits_saved):
+    """Pre-filled with the guess (or the saved format); returns the format to use for this file."""
+    cols = list(df.columns)
+    key = f"{slug}_{abs(hash(tuple(cols))) % 10**8}"  # a file with other columns starts from a fresh guess
+    if saved_format and not fits_saved:
+        st.warning(L["fmt_mismatch"])
+    st.caption(L["fmt_intro"])
+    kinds = ["daily", "receipts"]
+    kind = st.radio(L["fmt_kind"], kinds, index=kinds.index(guess.get("kind", "daily")),
+                    format_func=lambda k: L[f"kind_{k}"], key=f"fmt_kind_{key}")
+    date_col = st.selectbox(L["fmt_date"], cols, key=f"fmt_date_{key}",
+                            index=cols.index(guess["date_col"]) if guess.get("date_col") in cols else 0)
+    others = [c for c in cols if c != date_col]
+    count_opts = [None] + others
+    none_count = L["fmt_count_none_receipts"] if kind == "receipts" else L["fmt_count_none_daily"]
+    count_col = st.selectbox(L["fmt_count"], count_opts, key=f"fmt_count_{key}",
+                             index=count_opts.index(guess.get("count_col")) if guess.get("count_col") in count_opts else 0,
+                             format_func=lambda c: none_count if c is None else c)
+    unit, unit_name = "sales", ""
+    if count_col is not None or kind == "receipts":
+        units = ["guests", "checks", "orders", "custom"]
+        default_unit = guess.get("unit") if guess.get("unit") in units else ("checks" if kind == "receipts" else "guests")
+        unit = st.selectbox(L["fmt_unit"], units, index=units.index(default_unit),
+                            format_func=lambda u: L[f"unit_opt_{u}"], key=f"fmt_unit_{key}")
+        if unit == "custom":
+            unit_name = st.text_input(L["fmt_unit_name"], value=guess.get("unit_name", ""), key=f"fmt_uname_{key}")
+    rev_opts = [None] + [c for c in others if c != count_col]
+    revenue_col = st.selectbox(L["fmt_revenue"], rev_opts, key=f"fmt_rev_{key}",
+                               index=rev_opts.index(guess.get("revenue_col")) if guess.get("revenue_col") in rev_opts else 0,
+                               format_func=lambda c: L["fmt_none"] if c is None else c)
+    receipt_col = None
+    if kind == "receipts":
+        rc_opts = [None] + [c for c in others if c not in (count_col, revenue_col)]
+        receipt_col = st.selectbox(L["fmt_receipt"], rc_opts, key=f"fmt_receipt_{key}",
+                                   index=rc_opts.index(guess.get("receipt_col")) if guess.get("receipt_col") in rc_opts else 0,
+                                   format_func=lambda c: L["fmt_receipt_none"] if c is None else c)
+    fmt = {"kind": kind, "date_col": date_col, "count_col": count_col, "unit": unit, "unit_name": unit_name,
+           "revenue_col": revenue_col, "receipt_col": receipt_col, "reservations_col": guess.get("reservations_col")}
+    st.markdown(format_summary(fmt))
+    format_keys = ("kind", "date_col", "count_col", "unit", "unit_name", "revenue_col", "receipt_col")
+    if saved_format and all(saved_format.get(k) == fmt.get(k) for k in format_keys):
+        st.caption(L["fmt_saved"])
+    else:
+        st.caption(L["fmt_unsaved"])
+        if not guest_demo and slug in saved_names and st.button(L["fmt_save"], key=f"fmt_save_{key}", type="primary"):
+            storage.save_settings(slug, {**storage.load_settings(slug), "data_format": fmt})
+            st.rerun()
+    return fmt
+
+
+data_format = saved_format
+if upload_raw is not None:
+    fits_saved = core.format_fits(saved_format, upload_raw.columns)
+    with st.sidebar.expander(L["fmt_title"], expanded=not fits_saved):
+        data_format = format_editor(upload_raw, saved_format if fits_saved else core.detect_format(upload_raw),
+                                    fits_saved)
+elif saved_format:
+    with st.sidebar.expander(L["fmt_title"]):
+        st.markdown(format_summary(saved_format))
+data_unit = (data_format or {}).get("unit", "guests")
+money_unit = data_unit == "sales"
+unit_one = unit_words(selected_lang, data_unit, (data_format or {}).get("unit_name"))[3]
+t, L = unit_labels(t, L, selected_lang, data_unit, (data_format or {}).get("unit_name", ""))
+
 # --- Location & calendar ---
 with st.sidebar.expander(L["sec_location"]):
     # Default country first in the list; a workspace's saved country still wins.
@@ -700,13 +789,15 @@ using_demo_data = False
 if uploaded_file is not None:
     if not guest_demo:  # guests can try their own CSV, but stay in (unsaved) demo mode
         st.session_state.use_demo = False
-    try:
-        raw_df = cached_read_csv(uploaded_file.getvalue())
-    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, csv.Error):
+    if upload_raw is None:
         st.error(t["err_read"])
         st.stop()
+    if saved_format and saved_visits is not None and data_unit != saved_format.get("unit", "guests"):
+        st.warning(L["fmt_unit_changed"].format(
+            old=unit_words(selected_lang, saved_format.get("unit"), saved_format.get("unit_name"))[1],
+            new=unit_words(selected_lang, data_unit, (data_format or {}).get("unit_name"))[1]))
     upload_min_days = 1 if saved_visits is not None else core.MIN_DAYS
-    upload_clean, notes, error = core.clean_visits(raw_df, min_days=upload_min_days)
+    upload_clean, notes, error = core.clean_visits(upload_raw, min_days=upload_min_days, fmt=data_format)
     for level, key, kwargs in notes:
         getattr(st, level)(t[key].format(**kwargs))
     if error is not None:
@@ -762,6 +853,7 @@ if not guest_demo:
                 "avg_spend": avg_spend,
                 "dinner_spend": dinner_spend,
                 "guests_per_server": int(guests_per_server),
+                "data_format": data_format,
                 "staff_roles": current_roles(),
                 "shift_hours": shift_hours,
                 "staff_plan_for": staff_plan_for,
@@ -809,6 +901,26 @@ else:
 
 base_preds = bundle["forecaster"].forecast(history.tail(core.LOOKBACK_DAYS + core.HORIZON), future_weather)
 
+# Revenue straight from the sales history: either the file's main number is sales, or the file has a
+# count AND a sales column (then sales get their own model). Only without sales: guests x average spend.
+revenue_preds, avg_per_unit = None, None
+if money_unit:
+    revenue_preds = base_preds.copy()
+    base_preds = base_preds / core.spend_per_guest(base_preds.index, lunch_share, weekend_lunch_share,
+                                                   avg_spend, dinner_spend).to_numpy()
+else:
+    rev_visits = core.revenue_visits(visits)
+    if rev_visits is not None:
+        with st.spinner(t["spinner"]):
+            rev_bundle = cached_train(rev_visits, station, holiday_country, saved_events, model_spec,
+                                      tuple(sorted(feature_options.items())), core_version=core_code_version())
+        if rev_bundle is not None and rev_bundle["history"].index[-1] == last_date:
+            revenue_preds = rev_bundle["forecaster"].forecast(
+                rev_bundle["history"].tail(core.LOOKBACK_DAYS + core.HORIZON), future_weather)
+            both = core.history_only(visits).dropna(subset=["revenue"])
+            if both["visitors"].sum() > 0:
+                avg_per_unit = both["revenue"].sum() / both["visitors"].sum()
+
 event_active = bool(has_custom_event and event_date is not None)
 if event_active and event_date not in {d.date() for d in future_dates}:
     st.warning(t["warn_event_outside"])
@@ -824,6 +936,7 @@ plan = core.build_plan(
     roles=current_roles() or None,
     shift_hours=shift_hours,
     plan_for=staff_plan_for,
+    revenue_preds=revenue_preds,
 )
 
 week_total_guests = sum(r["expected"] for r in plan)
@@ -851,21 +964,30 @@ ui.md(ui.page_header(
 if using_demo_data:
     ui.md(ui.note(L["demo_note"]))
 
+if money_unit:
+    mean_spend = float(core.spend_per_guest(future_dates, lunch_share, weekend_lunch_share, avg_spend, dinner_spend).mean())
+    guests_sub = L["kpi_guests_est_sub"].format(s=f"{currency}{mean_spend:.2f}")
+    rev_sub = L["kpi_rev_model"]
+else:
+    guests_sub = L["kpi_avg_sub"].format(n=f"{bundle['mean_visitors']:.0f}")
+    rev_sub = (L["kpi_rev_model_avg"].format(s=f"{currency}{avg_per_unit:.2f}", unit=unit_one) if avg_per_unit
+               else L["kpi_rev_model"] if revenue_preds is not None
+               else L["kpi_rev_sub"].format(lunch=f"{currency}{avg_spend:.0f}", dinner=f"{currency}{dinner_spend:.0f}"))
 ui.md(ui.kpi_cards([
     {
-        "label": L["kpi_guests"], "value": f"{week_total_guests:,}", "unit": t["unit_people"],
-        "sub": L["kpi_avg_sub"].format(n=f"{bundle['mean_visitors']:.0f}"),
+        "label": L["kpi_guests"], "value": f"{week_total_guests:,}", "unit": t["unit_people"], "sub": guests_sub,
     },
     {
-        "label": L["kpi_revenue"], "value": f"{currency}{week_total_rev:,.0f}",
-        "sub": L["kpi_rev_sub"].format(lunch=f"{currency}{avg_spend:.0f}", dinner=f"{currency}{dinner_spend:.0f}"),
+        "label": L["kpi_revenue"], "value": f"{currency}{week_total_rev:,.0f}", "sub": rev_sub,
     },
     {
         "label": ui.plain(t["metric_wape7"]), "value": core.fmt_pct(bundle["wape7"]),
         "pill": (L["kpi_good"].format(edge=f"{edge_pct:.1f}"), "good") if beats_baseline else (L["kpi_warn"], "warn"),
     },
     {
-        "label": ui.plain(t["metric_mae"]), "value": f"±{bundle['mae']:.1f}", "unit": t["unit_people"],
+        "label": ui.plain(t["metric_mae"]),
+        "value": f"±{currency}{bundle['mae']:,.0f}" if money_unit else f"±{bundle['mae']:.1f}",
+        "unit": "" if money_unit else t["unit_people"],
         "sub": L["kpi_mae_sub"].format(wape=core.fmt_pct(bundle["wape"])),
     },
 ]))
@@ -1099,7 +1221,11 @@ with tab_prep:
         digest = hashlib.sha1(raw).hexdigest()
         if st.session_state.get(seen_key) != digest:  # only once per file, so later edits are kept
             st.session_state[seen_key] = digest
-            items, kind, err = core.parse_prep_file(raw, visits=visits)
+            usage_visits = visits
+            if money_unit:  # per-guest amounts need guests, not euros
+                usage_visits = visits.assign(visitors=visits["visitors"] / core.spend_per_guest(
+                    visits["visit_date"], lunch_share, weekend_lunch_share, avg_spend, dinner_spend).to_numpy())
+            items, kind, err = core.parse_prep_file(raw, visits=usage_visits)
             if err:
                 st.session_state[msg_key] = ("error", L["prep_upload_err"].format(err=err))
             else:
@@ -1222,7 +1348,12 @@ with tab_ai:
     st.caption(baseline_text)
 
     # What the forecast would have meant for a manager's schedule, on past weeks it never saw.
-    outcome = core.staffing_outcomes(bundle.get("backtest"), current_roles(), lunch_share, weekend_lunch_share,
+    staff_backtest = bundle.get("backtest")
+    if money_unit and staff_backtest is not None and len(staff_backtest):  # sales -> estimated guests for staff
+        spend = core.spend_per_guest(staff_backtest["date"], lunch_share, weekend_lunch_share, avg_spend,
+                                     dinner_spend).to_numpy()
+        staff_backtest = staff_backtest.assign(**{c: staff_backtest[c] / spend for c in ("actual", "pred", "base")})
+    outcome = core.staffing_outcomes(staff_backtest, current_roles(), lunch_share, weekend_lunch_share,
                                      shift_hours, bundle["intervals"], staff_plan_for)
     if outcome:
         st.subheader(L["acc_staff_title"])
@@ -1241,8 +1372,11 @@ with tab_ai:
     if misses:
         st.subheader(L["acc_shock_title"])
         k1, k2 = st.columns(2)
-        k1.metric(L["acc_shock_model"], L["acc_guests"].format(n=misses["model"]))
-        k2.metric(L["acc_shock_base"], L["acc_guests"].format(n=misses["base"]))
+        def miss_text(n):
+            return L["acc_money"].format(n=money(n)) if money_unit else L["acc_guests"].format(n=n)
+
+        k1.metric(L["acc_shock_model"], miss_text(misses["model"]))
+        k2.metric(L["acc_shock_base"], miss_text(misses["base"]))
         st.caption(L["acc_shock_caption"].format(days=misses["days"], share=misses["share"]))
 
     st.subheader(t["main_chart_header"])

@@ -12,10 +12,12 @@ Optional extras, each with an on/off switch in `options` (see FEATURE_OPTIONS):
   recency        recent days weigh more in training (half-life of one year)
   direct         one model predicts days 1..7 directly instead of feeding day-1 guesses into day 2
 """
+import csv
 import io
 import json
 import math
 import os
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -91,42 +93,283 @@ def resolve_options(options=None):
 # ----------------------------------------------------------------------------
 # Data loading & validation
 # ----------------------------------------------------------------------------
-def read_csv_bytes(raw_bytes):
-    """Parse an uploaded CSV. Handles BOMs, Latin-1 files and ; or , or tab separators."""
+def _decode(raw_bytes):
     try:
-        text = raw_bytes.decode("utf-8-sig")
+        return raw_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
-        text = raw_bytes.decode("latin-1")
-    df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
+        return raw_bytes.decode("latin-1")
+
+
+def _find_table(text):
+    """(delimiter, header line index) of the real table, skipping title lines that many tills print
+    above the headers ("Tagesbericht Filiale 1, 01.11.-07.11."). None when nothing table-like is found."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    best = None
+    for delim in (";", ",", "\t", "|"):
+        counts = [len(next(csv.reader([ln], delimiter=delim))) for ln in lines]
+        tail = counts[-min(len(counts), 40):]
+        width = max(set(tail), key=tail.count)
+        header = next((i for i, n in enumerate(counts[:25]) if n == width), None)
+        if width < 2 or header is None:
+            continue
+        table = counts[header:]
+        if table.count(width) >= 0.8 * len(table) and (best is None or width > best[2]):
+            best = (delim, header, width)
+    return None if best is None else (best[0], best[1])
+
+
+def read_csv_bytes(raw_bytes):
+    """Parse an uploaded CSV: BOMs, Latin-1, ; , tab or | separators, and title lines above the
+    headers. Values are read as text; numbers are parsed later with parse_numbers (1.240,50 etc.)."""
+    text = _decode(raw_bytes)
+    found = _find_table(text)
+    if found is None:
+        df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
+    else:
+        delim, header = found
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        df = pd.read_csv(io.StringIO("\n".join(lines[header:])), sep=delim, dtype=str, engine="python",
+                         skipinitialspace=True)
     df.columns = [str(c).strip().lower() for c in df.columns]
     return df
 
 
-DATE_ALIASES = {"visit_date", "date", "business_date", "day", "datum", "transaction_date", "order_date"}
-VISITOR_ALIASES = {"visitors", "covers", "guests", "pax", "headcount", "customers", "client_count", "anzahl"}
+_THOUSANDS_DOT = re.compile(r"^-?\d{1,3}(\.\d{3})+$")
+_THOUSANDS_COMMA = re.compile(r"^-?\d{1,3}(,\d{3})+$")
 
 
-def _standardize_pos_columns(raw_df):
-    """Map common POS export column names to 'visit_date', 'visitors' and 'reservations'."""
-    df = raw_df.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    col_map = {}
-    if "visit_date" not in df.columns:
-        for col in df.columns:
-            if col in DATE_ALIASES:
-                col_map[col] = "visit_date"
-                break
-    if "visitors" not in df.columns:
-        for col in df.columns:
-            if col in VISITOR_ALIASES:
-                col_map[col] = "visitors"
-                break
-    if "reservations" not in df.columns:
-        for col in df.columns:
-            if col in RESERVATION_ALIASES:
-                col_map[col] = "reservations"
-                break
-    return df.rename(columns=col_map) if col_map else df
+def parse_numbers(series):
+    """Numbers as tills write them: 1240.50, 1.240,50, 1,240.50, 1'240.50, '€ 1.240', '12,5'.
+    The decision is made per column, so '1.240' in a column of German totals is 1240, not 1.24."""
+    if pd.api.types.is_numeric_dtype(series):
+        return series.astype(float)
+    s = (series.astype(str).str.strip()
+         .str.replace(r"[€$£%\s ']|EUR|CHF|USD", "", regex=True)
+         .replace({"": np.nan, "nan": np.nan, "None": np.nan, "-": np.nan}))
+    vals = s.dropna()
+    dots = vals[vals.str.contains(".", regex=False) & ~vals.str.contains(",", regex=False)]
+    commas = vals[vals.str.contains(",", regex=False) & ~vals.str.contains(".", regex=False)]
+    dot_thousands = len(dots) >= 3 and dots.str.match(_THOUSANDS_DOT).all()
+    comma_thousands = len(commas) >= 1 and commas.str.match(_THOUSANDS_COMMA).all() and not len(dots)
+
+    def one(v):
+        if not isinstance(v, str):
+            return np.nan
+        if "." in v and "," in v:  # whichever comes last is the decimal mark
+            v = v.replace(".", "").replace(",", ".") if v.rfind(",") > v.rfind(".") else v.replace(",", "")
+        elif "," in v:
+            v = v.replace(",", "") if comma_thousands else v.replace(",", ".")
+        elif "." in v and dot_thousands:
+            v = v.replace(".", "")
+        try:
+            return float(v)
+        except ValueError:
+            return np.nan
+
+    return s.map(one).astype(float)
+
+
+# ----------------------------------------------------------------------------
+# File formats: which column is the date, what is counted, where are the sales
+# ----------------------------------------------------------------------------
+UNIT_KINDS = ("guests", "checks", "orders", "sales", "custom")
+COUNT_UNITS = ("guests", "checks", "orders", "custom")
+_ALIASES = {
+    "date": ["visit date", "date", "business date", "day", "datum", "transaction date", "order date", "tag",
+             "geschaeftstag", "belegdatum", "buchungsdatum", "rechnungsdatum", "abrechnungstag", "zeitpunkt",
+             "timestamp", "datetime", "date time", "created at", "jour", "date de vente", "datum uhrzeit"],
+    "guests": ["visitors", "covers", "guests", "gaeste", "pax", "headcount", "customers", "client count",
+               "anzahl gaeste", "personen", "anzahl personen", "couverts", "kunden", "besucher", "clients",
+               "anzahl", "persons", "people"],
+    "checks": ["belege", "bons", "anzahl belege", "anzahl bons", "bonanzahl", "belegeanzahl", "receipts", "checks",
+               "transactions", "transaktionen", "tickets", "rechnungen", "anzahl rechnungen", "receipt count",
+               "number of receipts", "nombre de tickets", "anzahl transaktionen"],
+    "orders": ["orders", "bestellungen", "auftraege", "commandes", "anzahl bestellungen", "order count"],
+    "revenue": ["umsatz brutto", "bruttoumsatz", "gross sales", "umsatz", "revenue", "sales", "turnover",
+                "tagesumsatz", "umsatz netto", "nettoumsatz", "net sales", "brutto", "netto", "total", "gesamt",
+                "summe", "betrag", "amount", "chiffre d affaires", "ca ttc", "montant", "total ttc", "gross", "net"],
+    "receipt": ["beleg nr", "belegnr", "belegnummer", "bon nr", "bonnr", "bonnummer", "receipt no",
+                "receipt number", "receipt id", "check no", "check number", "ticket no", "ticket id",
+                "rechnungsnr", "rechnungsnummer", "invoice", "invoice no", "transaction id", "order id",
+                "bestellnummer", "beleg", "bon", "receipt", "ticket", "check id"],
+}
+
+
+def _norm(name):
+    s = str(name).lower().strip()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"), ("é", "e"), ("è", "e")):
+        s = s.replace(a, b)
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+
+
+# Single generic words only count as an exact column name ("Anzahl Belege" is checks, not guests).
+_EXACT_ONLY = {"anzahl", "total", "gesamt", "summe", "net", "gross", "day", "tag", "bon", "beleg", "ticket",
+               "receipt", "people", "persons", "amount", "betrag", "brutto", "netto", "invoice"}
+
+
+def _match_kinds(columns, kinds, exclude=()):
+    """(column, kind) for the first column matching an alias of one of `kinds`: exact names across all
+    kinds first, then columns that contain all words of an alias. (None, None) if nothing matches."""
+    cols = [c for c in columns if c not in exclude]
+    normed = {c: _norm(c) for c in cols}
+    for kind in kinds:
+        for alias in _ALIASES[kind]:
+            for c in cols:
+                if normed[c] == alias:
+                    return c, kind
+    for kind in kinds:
+        for alias in _ALIASES[kind]:
+            if alias in _EXACT_ONLY:
+                continue
+            words = set(alias.split())
+            for c in cols:
+                if words <= set(normed[c].split()):
+                    return c, kind
+    return None, None
+
+
+def _match(columns, kind, exclude=()):
+    return _match_kinds(columns, [kind], exclude)[0]
+
+
+def _parse_dates(series):
+    """(parsed dates with time, day_first_used). ISO by majority, otherwise day-first (31.12.2025)."""
+    raw = series.astype(str).str.strip()
+    if raw.str.match(r"^\d{4}-\d{2}-\d{2}").mean() >= 0.5:
+        return pd.to_datetime(raw, errors="coerce", format="ISO8601"), False
+    return pd.to_datetime(raw, errors="coerce", dayfirst=True, format="mixed"), True
+
+
+def _numeric_share(df, col):
+    return float(parse_numbers(df[col]).notna().mean()) if col in df else 0.0
+
+
+def detect_format(df):
+    """Best guess of how to read a till export. Returns a format dict (see apply_format)."""
+    cols = list(df.columns)
+    date_col = _match(cols, "date")
+    if date_col is None or _parse_dates(df[date_col])[0].notna().mean() < 0.5:
+        date_col = next((c for c in cols if _parse_dates(df[c].head(200))[0].notna().mean() >= 0.8), None)
+    used = {date_col}
+    receipt_col = _match(cols, "receipt", exclude=used)
+    if receipt_col is not None and not df[receipt_col].notna().any():
+        receipt_col = None
+    if receipt_col:
+        used.add(receipt_col)
+
+    count_col, unit = None, "guests"
+    candidates = [c for c in cols if c not in used and _numeric_share(df, c) >= 0.5]
+    c, matched = _match_kinds(candidates, ["guests", "checks", "orders"])
+    if c is not None:
+        count_col, unit = c, matched
+    if count_col:
+        used.add(count_col)
+    revenue_col = _match(cols, "revenue", exclude=used)
+    if revenue_col is not None and _numeric_share(df, revenue_col) < 0.5:
+        revenue_col = None
+
+    kind = "daily"
+    if date_col is not None:
+        dates = df[date_col].astype(str)
+        has_time = dates.str.contains(r"\d{1,2}:\d{2}").mean() >= 0.5
+        per_day = _parse_dates(df[date_col])[0].dt.normalize().value_counts()
+        if has_time or (len(per_day) and per_day.median() > 3):
+            kind = "receipts"
+    if kind == "receipts" and unit != "guests":  # in a receipt list only covers per bill make sense as a count
+        count_col, unit = None, "checks"
+    if kind == "daily" and count_col is None:
+        if revenue_col is not None:
+            unit = "sales"
+        else:  # last resort: the first numeric column that is not the date
+            count_col = next((c for c in cols if c not in used and _numeric_share(df, c) >= 0.8), None)
+    if kind == "receipts" and count_col is None:
+        unit = "checks"
+    reservations_col = next((c for c in cols if c in RESERVATION_ALIASES), None)
+    return {"kind": kind, "date_col": date_col, "count_col": count_col, "unit": unit, "unit_name": "",
+            "revenue_col": revenue_col, "receipt_col": receipt_col if kind == "receipts" else None,
+            "reservations_col": reservations_col}
+
+
+def format_fits(fmt, columns):
+    """Does a saved format still match this file's columns?"""
+    if not fmt or not fmt.get("date_col"):
+        return False
+    needed = [fmt.get(k) for k in ("date_col", "count_col", "revenue_col", "receipt_col") if fmt.get(k)]
+    return set(needed) <= set(columns) and (fmt.get("count_col") or fmt.get("revenue_col")
+                                             or fmt.get("kind") == "receipts")
+
+
+def apply_format(df, fmt):
+    """Turn a till export into one row per day: visit_date, visitors (the main number: a count, or sales
+    when the file has only sales), revenue (when the file has a count AND sales), reservations, event_*."""
+    dates, _ = _parse_dates(df[fmt["date_col"]])
+    count = parse_numbers(df[fmt["count_col"]]) if fmt.get("count_col") else None
+    revenue = parse_numbers(df[fmt["revenue_col"]]) if fmt.get("revenue_col") else None
+
+    if fmt.get("kind") == "receipts":
+        receipt = (df[fmt["receipt_col"]].astype(str) if fmt.get("receipt_col")
+                   else pd.Series(np.arange(len(df)).astype(str), index=df.index))
+        rows = pd.DataFrame({"day": dates.dt.normalize(), "receipt": receipt})
+        rows["count"] = count if count is not None else np.nan
+        rows["revenue"] = revenue if revenue is not None else np.nan
+        rows = rows[rows["day"].notna()]
+
+        def per_receipt(col):
+            # a bill total repeated on every item row is counted once; item amounts are added up
+            g = rows.groupby(["day", "receipt"])[col]
+            return g.first().where(g.nunique() <= 1, g.sum(min_count=1))
+
+        daily = pd.DataFrame({"visits": rows.groupby(["day", "receipt"]).size()})
+        daily["count"] = per_receipt("count")
+        daily["revenue"] = per_receipt("revenue")
+        daily = daily.groupby(level="day").agg(n=("visits", "size"), count=("count", lambda s: s.sum(min_count=1)),
+                                               revenue=("revenue", lambda s: s.sum(min_count=1)))
+        out = pd.DataFrame({"visit_date": daily.index.strftime("%Y-%m-%d")})
+        out["visitors"] = (daily["count"] if count is not None else daily["n"]).to_numpy(dtype=float)
+        if revenue is not None:
+            out["revenue"] = daily["revenue"].to_numpy(dtype=float)
+        return out
+
+    out = pd.DataFrame({"visit_date": dates.dt.strftime("%Y-%m-%d").where(dates.notna(), None)})
+    if count is not None:
+        out["visitors"] = count
+        if revenue is not None:
+            out["revenue"] = revenue
+    elif revenue is not None:
+        out["visitors"] = revenue
+    if fmt.get("reservations_col") and fmt["reservations_col"] in df:
+        out["reservations"] = parse_numbers(df[fmt["reservations_col"]])
+    for c in df.columns:
+        if str(c).startswith("event_"):
+            out[c] = parse_numbers(df[c])
+    return out
+
+
+def is_money_unit(fmt):
+    return bool(fmt) and fmt.get("unit") == "sales"
+
+
+def revenue_visits(visits):
+    """The sales column as its own history (so revenue is forecast directly), or None when the file
+    has no sales column or too few days with sales."""
+    if visits is None or "revenue" not in visits or visits["revenue"].notna().sum() < MIN_DAYS:
+        return None
+    out = visits.drop(columns=["revenue"]).copy()
+    out["visitors"] = visits["revenue"]
+    keep = visits["revenue"].notna() | visits["visitors"].isna()  # future rows with events stay
+    out = out[keep & (visits["revenue"].isna() | (visits["revenue"] > 0))]
+    return out.reset_index(drop=True)
+
+
+def spend_per_guest(dates, lunch_share, weekend_lunch_share, avg_spend, dinner_spend):
+    """Average spend per guest for each date, mixing lunch and dinner spend by the lunch share."""
+    weekend = pd.DatetimeIndex(dates).dayofweek >= 5
+    wknd = lunch_share if weekend_lunch_share is None else weekend_lunch_share
+    share = np.where(weekend, wknd, lunch_share) / 100.0
+    spend = share * float(avg_spend) + (1 - share) * float(dinner_spend if dinner_spend is not None else avg_spend)
+    return pd.Series(np.maximum(spend, 0.01), index=pd.DatetimeIndex(dates))
 
 
 def extra_columns(df):
@@ -139,31 +382,35 @@ def history_only(visits):
     return visits[visits["visitors"].notna()].reset_index(drop=True)
 
 
-def clean_visits(raw_df, min_days=MIN_DAYS):
+LOOKS_LIKE_SALES = 1000  # a "count" whose normal day is above this is probably euros or items sold
+
+
+def clean_visits(raw_df, min_days=MIN_DAYS, fmt=None):
     """Validate and clean an upload.
 
-    Returns (clean_df, notes, error). `notes` is a list of (level, message_key, kwargs);
-    `error` is None or (message_key, kwargs). Messages are rendered by the UI (localized).
-    Optional columns `reservations` and `event_*` are kept. Rows AFTER the last guest count that
-    only carry those columns (empty guest count) are kept too: known future events/bookings.
+    fmt says how to read the file (see detect_format); it is detected when missing or when it does not
+    fit the file's columns. Returns (clean_df, notes, error). `notes` is a list of
+    (level, message_key, kwargs); `error` is None or (message_key, kwargs). Messages are rendered by the
+    UI (localized). Optional columns `revenue`, `reservations` and `event_*` are kept. Rows AFTER the last
+    count that only carry reservations/events (empty count) are kept too: known future events/bookings.
     """
-    raw_df = _standardize_pos_columns(raw_df)
-    if "visit_date" not in raw_df.columns or "visitors" not in raw_df.columns:
+    raw_df = raw_df.copy()
+    raw_df.columns = [str(c).strip().lower() for c in raw_df.columns]
+    if not format_fits(fmt, raw_df.columns):
+        fmt = detect_format(raw_df)
+    if not format_fits(fmt, raw_df.columns):
         return None, [], ("err_columns", {})
 
     notes = []
-    dates_raw = raw_df["visit_date"].astype(str).str.strip()
-    # Decide by majority: one junk row must not flip an ISO file to day-first parsing
-    # (which would silently drop every date with a day above 12).
-    if dates_raw.str.match(r"^\d{4}-\d{2}-\d{2}").mean() >= 0.5:
-        parsed = pd.to_datetime(dates_raw, errors="coerce", format="ISO8601")
-    else:
-        parsed = pd.to_datetime(dates_raw, errors="coerce", dayfirst=True)
+    # Day-first (31.12.) is decided by majority: one junk row must not flip an ISO file.
+    if _parse_dates(raw_df[fmt["date_col"]])[1]:
         notes.append(("info", "info_dayfirst", {}))
-    parsed = parsed.dt.normalize()
-    visitors = pd.to_numeric(raw_df["visitors"], errors="coerce")
+    raw_df = apply_format(raw_df, fmt)
+    parsed = pd.to_datetime(raw_df["visit_date"], errors="coerce").dt.normalize()
+    visitors = parse_numbers(raw_df["visitors"])
+    revenue = parse_numbers(raw_df["revenue"]) if "revenue" in raw_df else None
     extras = extra_columns(raw_df)
-    extra_vals = pd.DataFrame({c: pd.to_numeric(raw_df[c], errors="coerce") for c in extras}, index=raw_df.index)
+    extra_vals = pd.DataFrame({c: parse_numbers(raw_df[c]) for c in extras}, index=raw_df.index)
 
     valid = parsed.notna() & visitors.notna() & (visitors >= 0)
     if not valid.any():
@@ -178,10 +425,14 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
     clean = pd.DataFrame({"visit_date": parsed[rows], "visitors": visitors[rows].astype(float)})
     for c in extras:
         clean[c] = extra_vals.loc[rows, c].astype(float)
+    if revenue is not None:
+        clean["revenue"] = revenue[rows].astype(float)
     duplicates = int(clean.loc[clean["visitors"].notna(), "visit_date"].duplicated().sum())
     if duplicates:
         notes.append(("info", "warn_duplicates", {"n": duplicates}))
     agg = {"visitors": lambda s: s.sum(min_count=1)}
+    if revenue is not None:
+        agg["revenue"] = lambda s: s.sum(min_count=1)
     agg.update({c: "max" for c in extras})
     clean = clean.groupby("visit_date", as_index=False).agg(agg).sort_values("visit_date")
 
@@ -195,6 +446,10 @@ def clean_visits(raw_df, min_days=MIN_DAYS):
         return None, notes, ("err_dates", {})
     if len(hist) < min_days:
         return None, notes, ("err_too_short", {"min": min_days, "found": len(hist)})
+    typical = float(hist["visitors"].median())
+    if fmt.get("unit") in COUNT_UNITS and typical > LOOKS_LIKE_SALES:
+        notes.append(("warning", "warn_looks_like_sales", {"n": f"{typical:,.0f}"}))
+    clean.attrs["format"] = fmt
     return clean, notes, None
 
 
@@ -1157,12 +1412,14 @@ def build_plan(
     base_preds, intervals, last_date, event_date, event_extra,
     lunch_share, avg_spend, guests_per_server, events=None,
     weekend_lunch_share=None, dinner_spend=None, roles=None, shift_hours=None, plan_for="expected",
+    revenue_preds=None,
 ):
     """Turn raw model predictions into the planner rows (numbers only, no formatting).
 
     Supports distinct weekday vs. weekend lunch shares and separate lunch vs. dinner check averages.
     Staff: one entry per role (see DEFAULT_ROLES); without roles, a single server role at
     guests_per_server (the original behaviour). plan_for="busy" staffs for the top of the range.
+    revenue_preds: daily sales forecast from a sales history; without it revenue = guests x spend.
     """
     plan = []
     events_map = events or {}
@@ -1204,6 +1461,9 @@ def build_plan(
             lunch = int(round(expected * active_share / 100))
             dinner = expected - lunch
             revenue = round(lunch * avg_spend + dinner * din_spend, 2)
+            forecast_rev = np.nan if revenue_preds is None else revenue_preds.get(d, np.nan)
+            if pd.notna(forecast_rev):  # sales forecast straight from the sales history (+ event guests)
+                revenue = round(float(forecast_rev) + extra * revenue / expected, 2)
             staff_guests = high if plan_for == "busy" and high is not None else expected
             staff_lunch = int(round(staff_guests * active_share / 100))
             people = shift_staff(np.array([staff_lunch]), np.array([staff_guests - staff_lunch]), roles, slack)

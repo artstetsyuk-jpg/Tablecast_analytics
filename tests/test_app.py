@@ -230,6 +230,47 @@ def test_accuracy_tab_shows_schedule_outcomes_and_unusual_days(account):
         assert label in labels
 
 
+def _till_export(columns):
+    v = make_visits(days=120, seed=4)
+    lines = ["Tagesbericht Filiale 1", ";".join(columns)]
+    for d, n in zip(v["visit_date"], v["visitors"]):
+        row = {"Datum": d.strftime("%d.%m.%Y"), "Anzahl Belege": f"{n:.0f}",
+               "Umsatz brutto": f"{n * 24.5:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")}
+        lines.append(";".join(row[c] for c in columns))
+    return "\n".join(lines).encode("utf-8")
+
+
+def _upload(monkeypatch, data):
+    real_uploader = streamlit.file_uploader
+    monkeypatch.setattr(streamlit, "file_uploader", lambda *a, **k: FakeUpload(data)
+                        if k.get("key") == "csv_file_uploader" else real_uploader(*a, **k))
+
+
+def _page_text(at):
+    return " ".join(str(m.value) for m in at.markdown)
+
+
+def test_till_export_with_checks_and_sales_uses_their_words_and_forecasts_sales(account, monkeypatch):
+    _upload(monkeypatch, _till_export(["Datum", "Anzahl Belege", "Umsatz brutto"]))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    text = _page_text(at)
+    assert "Checks · next 7 days" in text and "Forecast from your sales history" in text
+    assert "24.50 per check" in text                      # their real average, learned from the file
+    at = next(b for b in at.button if str(b.key).startswith("fmt_save_")).click().run()
+    assert not at.exception
+    fmt = storage.load_settings(account)["data_format"]
+    assert (fmt["unit"], fmt["count_col"], fmt["revenue_col"]) == ("checks", "anzahl belege", "umsatz brutto")
+
+
+def test_sales_only_export_forecasts_sales_and_estimates_guests(account, monkeypatch):
+    _upload(monkeypatch, _till_export(["Datum", "Umsatz brutto"]))
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    assert not at.exception
+    text = _page_text(at)
+    assert "Guests (estimated) · next 7 days" in text and "Forecast from your sales history" in text
+
+
 def test_recipe_upload_fills_the_prep_list(account, monkeypatch):
     recipe = b"dish;share;ingredient;amount;unit;pack\nBurger;40%;Buns;1;pcs;12\nBurger;40%;Beef;0.2;kg;\n"
     real_uploader = streamlit.file_uploader

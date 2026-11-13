@@ -56,6 +56,23 @@ def build_location_report(slug, settings, today):
     avg_spend = float(settings.get("avg_spend", 25.0))
     dinner_spend = float(settings.get("dinner_spend", avg_spend))
 
+    # Same revenue rules as the app: a sales file is forecast as sales (guests estimated from it);
+    # a file with a count AND sales gets a second model for the sales.
+    revenue_preds = None
+    if core.is_money_unit(settings.get("data_format")):
+        revenue_preds = week_preds.copy()
+        week_preds = week_preds / core.spend_per_guest(week_preds.index, lunch_share, weekend_lunch_share,
+                                                       avg_spend, dinner_spend).to_numpy()
+    else:
+        rev_visits = core.revenue_visits(visits)
+        rev_bundle = None if rev_visits is None else core.train_bundle(
+            rev_visits, loc_station, holiday_country, events=saved_events,
+            model_spec=model if isinstance(model, str) else tuple(model), options=settings.get("options"))
+        if rev_bundle is not None and rev_bundle["history"].index[-1] == history.index[-1]:
+            rev_all = rev_bundle["forecaster"].forecast(rev_bundle["history"].tail(core.LOOKBACK_DAYS + core.HORIZON),
+                                                       future_weather)
+            revenue_preds = rev_all.loc[start:start + pd.Timedelta(days=core.HORIZON - 1)]
+
     plan = core.build_plan(
         week_preds, bundle["intervals"], last_date, None, 0,
         lunch_share, avg_spend, int(settings.get("guests_per_server", 15)),
@@ -65,6 +82,7 @@ def build_location_report(slug, settings, today):
         roles=core.drop_retired_roles(settings.get("staff_roles")) or core.default_staff_roles(UI_LABELS[lang], settings.get("guests_per_server")),
         shift_hours=settings.get("shift_hours"),
         plan_for=settings.get("staff_plan_for", "expected"),
+        revenue_preds=revenue_preds,
     )
     headers, _, pdf_rows = reports.format_plan(
         plan, t, days, months, bundle["intervals"] is not None, currency=currency
