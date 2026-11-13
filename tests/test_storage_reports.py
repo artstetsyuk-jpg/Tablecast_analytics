@@ -105,6 +105,52 @@ def test_week_plan_and_pdf_show_staff_per_role():
     assert reports.build_pdf("Week", ["line"], headers, pdf_rows).startswith(b"%PDF")
 
 
+class _FakeResponse:
+    def __init__(self, body=b"[]"):
+        self.body = body
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_cloud_backup_includes_staff_and_restore_keeps_days_with_empty_cells(monkeypatch):
+    import json as _json
+    sent = []
+    monkeypatch.setattr(storage, "_cloud_creds", lambda: ("https://example.supabase.co", "key"))
+    monkeypatch.setattr(storage.urllib.request, "urlopen",
+                        lambda req, timeout=8: sent.append(req) or _FakeResponse())
+    visits = pd.DataFrame({"visit_date": pd.to_datetime(["2026-11-01", "2026-11-02", "2026-11-03"]),
+                           "visitors": [100.0, 90.0, 80.0], "revenue": [2500.0, None, 2000.0]})
+    storage.save_visits("bistro", visits)
+    storage.save_staff("bistro", pd.DataFrame({"date": pd.to_datetime(["2026-11-01"]), "shift": ["lunch"],
+                                               "role": ["Service"], "people": [2.0]}))
+    storage.sync_to_cloud("bistro")
+    payload = _json.loads(sent[-1].data)
+    assert "staff_csv" in payload and "visits_csv" in payload
+
+    # restore into an empty data folder: the day without a sales value must survive
+    row = dict(payload)
+    for name in ("visits.csv", "staff_actual.csv"):
+        (storage.data_dir() / "locations" / "bistro" / name).unlink()
+    monkeypatch.setattr(storage.urllib.request, "urlopen",
+                        lambda req, timeout=8: _FakeResponse(_json.dumps([row]).encode()))
+    storage.pull_all_from_cloud()
+    assert len(storage.load_visits("bistro")) == 3
+    assert storage.load_staff("bistro")["people"].tolist() == [2.0]
+
+
+def test_settings_become_plain_json():
+    import numpy as np
+    assert storage.jsonable({"a": float("nan"), "b": [np.int64(3), np.float64(2.5)], "c": np.bool_(True)}) == {
+        "a": None, "b": [3, 2.5], "c": True}
+
+
 def test_pdf_is_generated():
     pdf = reports.build_pdf("Report – Café", ["line"], ["A", "B"], [["1", "2"]])
     assert pdf.startswith(b"%PDF")

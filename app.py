@@ -199,8 +199,12 @@ for key, default in (
     if key not in st.session_state:
         st.session_state[key] = default
 
+# Restore saved restaurants from the cloud backup once per server start (the free Streamlit server
+# forgets local files when it restarts), not once per visitor.
 if not st.session_state.cloud_pulled:
-    storage.pull_all_from_cloud()
+    if not sys.__dict__.get("_tablecast_cloud_pulled"):
+        storage.pull_all_from_cloud()
+        sys.__dict__["_tablecast_cloud_pulled"] = True
     st.session_state.cloud_pulled = True
 
 ui.md(ui.sidebar_brand(BRAND), sidebar=True)
@@ -462,6 +466,8 @@ else:
         t["location_name"], value=saved_names.get(chosen_slug, ""), key=f"loc_name_{chosen_slug or 'new'}"
     ).strip()
     slug = storage.slugify(loc_name) if loc_name else "default"
+    if loc_name and slug not in saved_names:
+        st.sidebar.warning(L["unsaved_new"].format(name=loc_name))
     if need_login and st.sidebar.button(L["btn_logout"], key="admin_logout_btn", width="stretch"):
         log_out()
 
@@ -829,6 +835,35 @@ else:
     visits = generate_demo_visits()
     using_demo_data = True
 
+def settings_snapshot():
+    """Everything saved for a restaurant except the password (that only changes on purpose)."""
+    return storage.jsonable({
+        "name": loc_name,
+        "language": selected_lang,
+        "country": country,
+        "subdiv": subdiv_code,
+        "currency": currency,
+        "temp_unit": temp_unit,
+        "station": station,
+        "lunch_share": lunch_share,
+        "weekend_lunch_share": weekend_lunch_share,
+        "avg_spend": avg_spend,
+        "dinner_spend": dinner_spend,
+        "guests_per_server": int(guests_per_server),
+        "data_format": data_format,
+        "staff_roles": current_roles(),
+        "shift_hours": shift_hours,
+        "staff_plan_for": staff_plan_for,
+        "recipients": recipients_text,
+        "owner_email": owner_email,
+        # The prep tab is drawn further down: at the end of the page these are this run's values.
+        "prep_items": st.session_state.get(f"prep_items_list_{slug}", settings.get("prep_items")),
+        "prep_buffer": int(st.session_state.get(f"prep_buf_{slug}", settings.get("prep_buffer", 10))),
+        "model": model_setting,
+        "options": feature_options,
+    })
+
+
 if not guest_demo:
     st.sidebar.divider()
     if st.sidebar.button(t["save_location_btn"], key="save_location_button", type="primary", width="stretch"):
@@ -841,29 +876,7 @@ if not guest_demo:
         else:
             storage.save_visits(slug, visits)
             storage.save_settings(slug, {
-                "name": loc_name,
-                "language": selected_lang,
-                "country": country,
-                "subdiv": subdiv_code,
-                "currency": currency,
-                "temp_unit": temp_unit,
-                "station": station,
-                "lunch_share": lunch_share,
-                "weekend_lunch_share": weekend_lunch_share,
-                "avg_spend": avg_spend,
-                "dinner_spend": dinner_spend,
-                "guests_per_server": int(guests_per_server),
-                "data_format": data_format,
-                "staff_roles": current_roles(),
-                "shift_hours": shift_hours,
-                "staff_plan_for": staff_plan_for,
-                "recipients": recipients_text,
-                "owner_email": owner_email,
-                # The prep tab is drawn further down, so read its current values from session state.
-                "prep_items": st.session_state.get(f"prep_items_list_{slug}", settings.get("prep_items")),
-                "prep_buffer": int(st.session_state.get(f"prep_buf_{slug}", settings.get("prep_buffer", 10))),
-                "model": model_setting,
-                "options": feature_options,
+                **settings_snapshot(),
                 "password_hash": (
                     storage.hash_password(new_loc_password) if new_loc_password else settings.get("password_hash", "")
                 ),
@@ -872,6 +885,8 @@ if not guest_demo:
             st.session_state["pending_location"] = slug
             st.session_state["flash"] = ("success", t["saved_ok"])
             st.rerun()
+    if slug in saved_names:
+        st.sidebar.caption(L["autosave_hint"])
 
 
 # ============================================================================
@@ -1601,3 +1616,20 @@ with tab_export:
         st.caption(t["auto_email_hint"])
 
 ui.md(ui.footer(L["footer"], MAKER))
+
+
+# ============================================================================
+# Autosave: an existing restaurant keeps every change without pressing Save.
+# Runs last, so the tabs (staff roles, prep list, ...) have their values from this run.
+# ============================================================================
+if not guest_demo and slug in saved_names:
+    stored_settings = storage.load_settings(slug)
+    snapshot = settings_snapshot()
+    snapshot.pop("language")  # the email/report language only changes with Save (viewers may switch the screen)
+    if owner_email and not valid_email(owner_email):
+        snapshot.pop("owner_email")
+    updated = {**stored_settings, **snapshot}
+    if storage.jsonable(updated) != storage.jsonable(stored_settings):
+        storage.save_settings(slug, updated)
+        storage.sync_to_cloud(slug)
+        st.toast(L["autosaved_settings"], icon="✅")

@@ -61,6 +61,21 @@ def save_settings(slug, settings):
     (folder / "settings.json").write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def jsonable(obj):
+    """Settings as plain JSON values: NaN (empty cells) -> None, numpy numbers -> Python numbers."""
+    if isinstance(obj, dict):
+        return {str(k): jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [jsonable(v) for v in obj]
+    if isinstance(obj, (np.floating, float)):
+        return None if np.isnan(obj) else float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    return obj
+
+
 def load_events(slug):
     """Return saved custom events for a location as {'YYYY-MM-DD': extra_guests_int}."""
     path = _location_dir(slug) / "events.json"
@@ -454,6 +469,7 @@ def sync_to_cloud(slug: str):
         ("settings.json", "settings_json"),
         ("events.json", "events_json"),
         ("visits.csv", "visits_csv"),
+        ("staff_actual.csv", "staff_csv"),
     ):
         fpath = loc_folder / fname
         if fpath.exists():
@@ -511,7 +527,17 @@ def pull_all_from_cloud():
                 try:
                     cloud_visits = pd.read_csv(io.StringIO(row["visits_csv"]), parse_dates=["visit_date"])
                     cloud_visits["visitors"] = pd.to_numeric(cloud_visits["visitors"], errors="coerce")
-                    save_visits(slug, cloud_visits.dropna())
+                    # Keep days with empty cells (no sales value, no event flag, future booking rows):
+                    # only rows without a date are unusable.
+                    save_visits(slug, cloud_visits.dropna(subset=["visit_date"]))
+                except Exception:
+                    pass
+
+            if row.get("staff_csv"):
+                try:
+                    cloud_staff = pd.read_csv(io.StringIO(row["staff_csv"]), parse_dates=["date"])
+                    if set(STAFF_COLUMNS) <= set(cloud_staff.columns):
+                        save_staff(slug, cloud_staff[STAFF_COLUMNS])
                 except Exception:
                     pass
 

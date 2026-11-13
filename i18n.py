@@ -1321,3 +1321,19 @@ _T_FORMAT = {
 }
 for _lang, _text in _T_FORMAT.items():
     TRANSLATIONS[_lang].update(_text)
+
+
+# Saving: existing restaurants save every change automatically; new ones need Save once.
+_SAVE_TEXT = {
+    "English": {"autosaved_settings": "Changes saved",
+                "autosave_hint": "Changes are saved automatically. Use Save only to change the password or the email language.",
+                "unsaved_new": "'{name}' is not saved yet. Press Save to create this restaurant; until then nothing is stored."},
+    "German": {"autosaved_settings": "Änderungen gespeichert",
+               "autosave_hint": "Änderungen werden automatisch gespeichert. Speichern nur, um das Passwort oder die Sprache der E-Mails zu ändern.",
+               "unsaved_new": "„{name}“ ist noch nicht gespeichert. Auf Speichern drücken, um das Lokal anzulegen; bis dahin wird nichts gespeichert."},
+    "French": {"autosaved_settings": "Modifications enregistrées",
+               "autosave_hint": "Les modifications sont enregistrées automatiquement. Enregistrer sert seulement à changer le mot de passe ou la langue des e-mails.",
+               "unsaved_new": "« {name} » n'est pas encore enregistré. Appuyez sur Enregistrer pour créer ce restaurant ; d'ici là, rien n'est sauvegardé."},
+}
+for _lang, _text in _SAVE_TEXT.items():
+    UI_LABELS[_lang].update(_text)

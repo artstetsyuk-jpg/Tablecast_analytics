@@ -290,6 +290,18 @@ def test_staff_upload_compares_who_really_worked(account, monkeypatch):
     assert any("Use my real numbers" == b.label for b in at.button)
 
 
+def test_changes_are_saved_without_pressing_save(account):
+    at = sign_in(run_app(), "Harbor Bistro", PASSWORD)
+    at = at.number_input(key=f"spend_{account}").set_value(7.5).run()
+    assert not at.exception
+    assert storage.load_settings(account)["avg_spend"] == 7.5
+    assert storage.verify_location_password(account, PASSWORD)      # the password is untouched
+    path = storage.data_dir() / "locations" / account / "settings.json"
+    before = path.stat().st_mtime_ns
+    at = at.run()                                                    # nothing changed: nothing written
+    assert path.stat().st_mtime_ns == before
+
+
 def test_recipe_upload_fills_the_prep_list(account, monkeypatch):
     recipe = b"dish;share;ingredient;amount;unit;pack\nBurger;40%;Buns;1;pcs;12\nBurger;40%;Beef;0.2;kg;\n"
     real_uploader = streamlit.file_uploader
