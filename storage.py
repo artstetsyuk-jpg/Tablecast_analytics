@@ -449,6 +449,14 @@ def _cloud_creds():
     return (url.rstrip("/"), key.strip()) if (url and key) else None
 
 
+def _cloud_headers(api_key):
+    """Old Supabase keys are JWTs (eyJ...) and also go in Authorization; new sb_secret_ keys must not."""
+    headers = {"apikey": api_key}
+    if api_key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
 def is_cloud_enabled() -> bool:
     return _cloud_creds() is not None
 
@@ -482,12 +490,8 @@ def sync_to_cloud(slug: str):
     req = urllib.request.Request(
         f"{base_url}/rest/v1/tablecast_locations",
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "apikey": api_key,
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates",
-        },
+        headers={**_cloud_headers(api_key), "Content-Type": "application/json",
+                 "Prefer": "resolution=merge-duplicates"},
         method="POST",
     )
     try:
@@ -505,7 +509,7 @@ def pull_all_from_cloud():
     base_url, api_key = creds
     req = urllib.request.Request(
         f"{base_url}/rest/v1/tablecast_locations?select=*",
-        headers={"apikey": api_key, "Authorization": f"Bearer {api_key}"},
+        headers=_cloud_headers(api_key),
         method="GET",
     )
     try:

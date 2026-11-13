@@ -145,6 +145,11 @@ def test_cloud_backup_includes_staff_and_restore_keeps_days_with_empty_cells(mon
     assert storage.load_staff("bistro")["people"].tolist() == [2.0]
 
 
+def test_cloud_headers_for_old_and_new_supabase_keys():
+    assert storage._cloud_headers("eyJhbGciOi.x.y") == {"apikey": "eyJhbGciOi.x.y", "Authorization": "Bearer eyJhbGciOi.x.y"}
+    assert storage._cloud_headers("sb_secret_abc") == {"apikey": "sb_secret_abc"}
+
+
 def test_settings_become_plain_json():
     import numpy as np
     assert storage.jsonable({"a": float("nan"), "b": [np.int64(3), np.float64(2.5)], "c": np.bool_(True)}) == {
