@@ -62,7 +62,7 @@ def build_location_report(slug, settings, today):
         events=saved_events,
         weekend_lunch_share=weekend_lunch_share,
         dinner_spend=dinner_spend,
-        roles=settings.get("staff_roles") or core.default_staff_roles(UI_LABELS[lang], settings.get("guests_per_server")),
+        roles=core.drop_retired_roles(settings.get("staff_roles")) or core.default_staff_roles(UI_LABELS[lang], settings.get("guests_per_server")),
         shift_hours=settings.get("shift_hours"),
         plan_for=settings.get("staff_plan_for", "expected"),
     )

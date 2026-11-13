@@ -564,7 +564,8 @@ roles_base_key, roles_editor_key = f"staff_roles_base_{slug}", f"staff_editor_{s
 if roles_base_key not in st.session_state:
     st.session_state[roles_base_key] = [
         {**r, "shift": WORKS_LABELS.get(r.get("shift", "both"), WORKS_LABELS["both"])}
-        for r in (settings.get("staff_roles") or core.default_staff_roles(L, settings.get("guests_per_server")))
+        for r in (core.drop_retired_roles(settings.get("staff_roles"))
+                  or core.default_staff_roles(L, settings.get("guests_per_server")))
     ]
 
 

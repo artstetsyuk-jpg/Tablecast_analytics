@@ -627,14 +627,17 @@ DEFAULT_SHIFT_HOURS = {"lunch": 5.0, "dinner": 6.0}
 # A person can absorb a little extra: the next person is only added once a shift is more than 15%
 # of one person's load over capacity (31 guests at 15 per waiter = 2 waiters, not 3).
 STAFF_SLACK = 0.15
-# Sensible casual-restaurant defaults; every restaurant edits these (key = translation key).
-# Tuned so a typical casual restaurant lands at ~30% labour cost / revenue.
+# Waiters and chefs; every restaurant edits these (key = translation key).
 DEFAULT_ROLES = [
     {"key": "role_waiters", "per": 20.0, "min": 1, "wage": 14.0, "shift": "both"},
     {"key": "role_cooks", "per": 40.0, "min": 1, "wage": 16.0, "shift": "both"},
-    {"key": "role_bartenders", "per": 80.0, "min": 0, "wage": 14.0, "shift": "dinner"},
-    {"key": "role_dishwashers", "per": 120.0, "min": 1, "wage": 13.0, "shift": "both"},
 ]
+# Bar and dishwashers were default roles for a short while; accounts that saved them drop them again.
+RETIRED_ROLE_NAMES = {"Bartenders", "Bar", "Barmans", "Dishwashers", "Spüler", "Plongeurs"}
+
+
+def drop_retired_roles(roles):
+    return [r for r in roles or [] if str(r.get("name", "")).strip() not in RETIRED_ROLE_NAMES]
 
 
 def default_staff_roles(labels, waiter_per=None):

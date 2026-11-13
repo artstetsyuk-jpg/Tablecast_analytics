@@ -237,6 +237,13 @@ ROLES = [{"name": "Waiters", "per": 15, "min": 1, "wage": 14.0, "shift": "both"}
          {"name": "Bar", "per": 45, "min": 0, "wage": 14.0, "shift": "dinner"}]
 
 
+def test_default_roles_are_waiters_and_chefs_and_old_extras_are_dropped():
+    from i18n import UI_LABELS
+    assert [r["name"] for r in core.default_staff_roles(UI_LABELS["German"])] == ["Kellner", "Köche"]
+    saved = [{"name": "Service"}, {"name": "Köche"}, {"name": "Bar"}, {"name": "Spüler"}, {"name": "Barista"}]
+    assert [r["name"] for r in core.drop_retired_roles(saved)] == ["Service", "Köche", "Barista"]
+
+
 def test_people_needed_has_a_minimum_crew_and_some_slack():
     assert core.people_needed([0, 3, 15, 16, 17, 18, 31], 15, minimum=1).tolist() == [0, 1, 1, 1, 1, 2, 2]
     # 16/15 = 1.07 (within 15% of one person) -> 1; 18/15 = 1.2 -> 2; 31/15 = 2.07 -> 2

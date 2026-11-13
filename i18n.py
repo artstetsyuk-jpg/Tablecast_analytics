@@ -889,8 +889,7 @@ _STAFF_TEXT = {
         "plan_staff_note": "Staff per role as lunch / dinner (3 / 4 = 3 at lunch, 4 at dinner). Roles and how many guests each person handles are set in the Staff tab.",
         "staff_caption": "Who works a shift and how many guests one person handles in that shift. "
                          "TableCast turns the forecast into people per role, hours and labour cost.",
-        "role_waiters": "Waiters", "role_cooks": "Cooks", "role_bartenders": "Bartenders",
-        "role_dishwashers": "Dishwashers",
+        "role_waiters": "Waiters", "role_cooks": "Chefs",
         "col_role": "Role", "col_per": "Guests per person (per shift)", "col_min": "Minimum per open shift",
         "col_wage": "Wage per hour ({c})", "col_works": "Works",
         "works_both": "Lunch & dinner", "works_lunch": "Lunch only", "works_dinner": "Dinner only",
@@ -947,8 +946,7 @@ _STAFF_TEXT = {
         "plan_staff_note": "Personal pro Rolle als Mittag / Abend (3 / 4 = 3 mittags, 4 abends). Rollen und wie viele Gäste eine Person schafft, stellen Sie im Tab Personal ein.",
         "staff_caption": "Wer in einer Schicht arbeitet und wie viele Gäste eine Person pro Schicht schafft. "
                          "TableCast macht aus der Prognose Personen pro Rolle, Stunden und Personalkosten.",
-        "role_waiters": "Service", "role_cooks": "Köche", "role_bartenders": "Bar",
-        "role_dishwashers": "Spüler",
+        "role_waiters": "Kellner", "role_cooks": "Köche",
         "col_role": "Rolle", "col_per": "Gäste pro Person (pro Schicht)", "col_min": "Minimum pro offener Schicht",
         "col_wage": "Stundenlohn ({c})", "col_works": "Arbeitet",
         "works_both": "Mittag & Abend", "works_lunch": "Nur Mittag", "works_dinner": "Nur Abend",
@@ -1004,8 +1002,7 @@ _STAFF_TEXT = {
         "plan_staff_note": "Personnel par poste en midi / soir (3 / 4 = 3 le midi, 4 le soir). Les postes et le nombre de clients par personne se règlent dans l'onglet Personnel.",
         "staff_caption": "Qui travaille pendant un service et combien de clients une personne gère par service. "
                          "TableCast transforme la prévision en personnes par poste, heures et coût salarial.",
-        "role_waiters": "Serveurs", "role_cooks": "Cuisiniers", "role_bartenders": "Barmans",
-        "role_dishwashers": "Plongeurs",
+        "role_waiters": "Serveurs", "role_cooks": "Cuisiniers",
         "col_role": "Poste", "col_per": "Clients par personne (par service)", "col_min": "Minimum par service ouvert",
         "col_wage": "Salaire horaire ({c})", "col_works": "Travaille",
         "works_both": "Midi & soir", "works_lunch": "Midi seulement", "works_dinner": "Soir seulement",

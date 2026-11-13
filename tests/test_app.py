@@ -251,5 +251,5 @@ def test_staff_roles_are_editable_and_saved(account):
     at = at.button(key="save_location_button").click().run()
     assert not at.exception
     saved = storage.load_settings(account)
-    assert [r["name"] for r in saved["staff_roles"]] == ["Waiters", "Cooks", "Bartenders", "Dishwashers"]
+    assert [r["name"] for r in saved["staff_roles"]] == ["Waiters", "Chefs"]
     assert saved["shift_hours"]["lunch"] == 4.0 and saved["staff_plan_for"] == "expected"
